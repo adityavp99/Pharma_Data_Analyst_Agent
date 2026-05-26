@@ -1,0 +1,136 @@
+Trial:
+  description: A synthetic clinical trial studying a drug for an indication.
+  source_table: trials
+  primary_key: trial_id
+  common_dimensions:
+    - phase
+    - therapeutic_area
+    - drug_name
+    - indication
+    - status
+    - country
+  related_entities:
+    - Site
+    - Patient
+    - Adverse Event
+    - Lab Result
+    - Drug
+
+Site:
+  description: A synthetic trial site with enrollment target and actual enrollment.
+  source_table: sites
+  primary_key: site_id
+  common_dimensions:
+    - trial_id
+    - country
+    - investigator_name
+  related_entities:
+    - Trial
+    - Patient
+
+Patient:
+  description: A synthetic participant record with no real patient-identifiable information.
+  source_table: patients
+  primary_key: patient_id
+  common_dimensions:
+    - trial_id
+    - site_id
+    - age_group
+    - sex
+    - baseline_condition
+    - treatment_arm
+  related_entities:
+    - Trial
+    - Site
+    - Adverse Event
+    - Lab Result
+    - Treatment Arm
+
+Adverse Event:
+  description: A synthetic adverse event observed for a synthetic patient in a trial.
+  source_table: adverse_events
+  primary_key: ae_id
+  common_dimensions:
+    - trial_id
+    - patient_id
+    - event_term
+    - severity
+    - seriousness
+    - outcome
+    - related_to_drug
+  related_entities:
+    - Trial
+    - Patient
+
+Lab Result:
+  description: A synthetic lab result with simplified normal range fields.
+  source_table: lab_results
+  primary_key: lab_id
+  common_dimensions:
+    - trial_id
+    - patient_id
+    - test_name
+    - unit
+    - result_date
+  related_entities:
+    - Trial
+    - Patient
+
+Drug Sales:
+  description: Synthetic monthly commercial sales by drug, country, region, and channel.
+  source_table: drug_sales
+  primary_key: sale_id
+  common_dimensions:
+    - drug_name
+    - country
+    - region
+    - month
+    - channel
+    - currency
+  related_entities:
+    - Drug
+    - Country
+
+Drug:
+  description: A synthetic drug name appearing in trials and sales.
+  source_table: trials
+  primary_key: drug_name
+  common_dimensions:
+    - therapeutic_area
+    - indication
+  related_entities:
+    - Trial
+    - Drug Sales
+
+Country:
+  description: Country dimension used for trial, site, and sales reporting.
+  source_table: trials
+  primary_key: country
+  common_dimensions:
+    - country
+  related_entities:
+    - Trial
+    - Site
+    - Drug Sales
+
+Therapeutic Area:
+  description: High-level clinical area for trials and indications.
+  source_table: trials
+  primary_key: therapeutic_area
+  common_dimensions:
+    - therapeutic_area
+    - indication
+  related_entities:
+    - Trial
+    - Drug
+
+Treatment Arm:
+  description: Synthetic assigned intervention group for a patient.
+  source_table: patients
+  primary_key: treatment_arm
+  common_dimensions:
+    - treatment_arm
+    - trial_id
+  related_entities:
+    - Patient
+    - Trial

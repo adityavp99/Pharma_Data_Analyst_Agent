@@ -1,0 +1,75 @@
+enrollment_rate:
+  description: Percentage of enrolled patients versus enrollment target.
+  formula: SUM(enrolled_patients) / SUM(enrollment_target)
+  tables:
+    - sites
+  default_grain:
+    - trial_id
+    - country
+  cautions:
+    - Use site-level enrollment_target and enrolled_patients.
+    - Avoid averaging site-level percentages unless explicitly requested.
+
+enrollment_gap:
+  description: Difference between enrollment target and enrolled patients.
+  formula: SUM(enrollment_target) - SUM(enrolled_patients)
+  tables:
+    - sites
+  cautions:
+    - Positive values mean enrollment is below target.
+
+serious_ae_count:
+  description: Count of adverse events where seriousness equals Serious.
+  formula: COUNT(adverse_events where seriousness = 'Serious')
+  tables:
+    - adverse_events
+  cautions:
+    - Serious adverse event counts are descriptive and do not establish causality.
+
+related_ae_count:
+  description: Count of adverse events flagged as related to drug.
+  formula: COUNT(adverse_events where related_to_drug = 1)
+  tables:
+    - adverse_events
+  cautions:
+    - Relatedness is a synthetic flag in this MVP and should not be interpreted clinically.
+
+ae_rate_per_patient:
+  description: Adverse events per enrolled patient.
+  formula: COUNT(adverse_events) / COUNT(DISTINCT patients.patient_id)
+  tables:
+    - adverse_events
+    - patients
+  cautions:
+    - This is not a clinical incidence rate unless denominator and observation window are properly defined.
+    - Do not infer causality.
+
+out_of_range_lab_rate:
+  description: Percentage of lab results outside normal range.
+  formula: COUNT(results where result_value < normal_low OR result_value > normal_high) / COUNT(lab_results)
+  tables:
+    - lab_results
+  cautions:
+    - Lab reference ranges are synthetic and simplified.
+
+net_sales:
+  description: Total net sales.
+  formula: SUM(net_sales)
+  tables:
+    - drug_sales
+  cautions:
+    - Currency is USD in the synthetic dataset.
+
+units_sold:
+  description: Total units sold.
+  formula: SUM(units_sold)
+  tables:
+    - drug_sales
+
+net_sales_per_unit:
+  description: Net sales divided by units sold.
+  formula: SUM(net_sales) / SUM(units_sold)
+  tables:
+    - drug_sales
+  cautions:
+    - Use aggregate numerator and denominator; do not average row-level ratios.
