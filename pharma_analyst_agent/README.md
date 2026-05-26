@@ -11,7 +11,7 @@ The MVP shows how an agent can route a natural-language analytics question to a 
 - Semantic layer for metrics, ontology, and business glossary.
 - Read-only SQL tool with mutation/admin command blocking.
 - Controlled Python analysis tool using predefined pandas/numpy functions only.
-- Deterministic tool router and orchestrator.
+- Deterministic tool router, metric SQL builders, and optional LLM SQL planner.
 - Streamlit UI for local demos.
 - Pytest coverage for SQL safety, semantic loading, and sample questions.
 
@@ -36,7 +36,7 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-The app works without an OpenAI API key because this MVP includes deterministic routing and SQL templates. The prompt files are included so an OpenAI-compatible tool-calling planner can be added cleanly later.
+The app works without an OpenAI/OpenRouter API key because this MVP includes unit-tested metric SQL builders and safe fallback plans. If `OPENROUTER_API_KEY` is configured, the planner can use an OpenAI-compatible LLM to generate SQL for questions that are not covered by metric builders.
 
 ### Step 2: Generate and Load Synthetic Data
 
@@ -89,7 +89,7 @@ The flow is:
 1. User asks a natural-language question.
 2. `agent/tool_router.py` decides whether the question needs semantic context, SQL, Python, or refusal.
 3. `tools/semantic_tool.py` retrieves relevant metric, ontology, or glossary context.
-4. `agent/orchestrator.py` creates a read-only SQL plan for supported MVP question types.
+4. `agent/sql_planner.py` plans the query. It first uses controlled Python templates for trend/correlation/outlier requests, then unit-tested metric SQL builders, then optional OpenRouter LLM SQL generation, then a safe fallback summary.
 5. `tools/sql_tool.py` validates SQL, rejects unsafe statements, opens SQLite in read-only mode, and returns rows.
 6. `tools/python_tool.py` runs only predefined analysis functions when extra post-query computation is needed.
 7. `agent/response_formatter.py` formats the final answer with evidence, SQL, assumptions, and limitations.
@@ -106,8 +106,8 @@ The flow is:
 
 ## Suggested Next Steps
 
-- Replace deterministic SQL templates with an LLM planner using the prompts in `agent/prompts.py`.
-- Add a query approval/debug screen in Streamlit.
+- Expand the LLM planner evaluation set and add more golden expected outputs.
+- Add a query approval/debug screen before executing LLM-generated SQL.
 - Expand the semantic layer and add unit-tested metric SQL builders.
 - Add chart rendering for trend and distribution outputs.
 - Add a vector database only after keyword semantic search becomes limiting.

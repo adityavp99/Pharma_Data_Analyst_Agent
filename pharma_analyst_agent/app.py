@@ -256,6 +256,7 @@ if st.button("Analyze", type="primary") and question:
         st.write("3. Run only read-only SQL against the synthetic SQLite database.")
         st.write("4. Run controlled Python only for trends, percentage change, summaries, or outliers.")
         st.write("5. Show the evidence, SQL, assumptions, and limitations.")
+        st.write(f"Planner source: `{result.get('planner_source', 'not applicable')}`")
         st.json(result.get("routing", {}))
         if result.get("chart_plan"):
             st.write("Chart recommendation:")

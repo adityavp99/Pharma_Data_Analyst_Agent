@@ -52,6 +52,10 @@ def load_business_glossary() -> dict[str, Any]:
     return _load_yaml("business_glossary.yaml")
 
 
+def load_join_paths() -> dict[str, Any]:
+    return _load_yaml("join_paths.yaml")
+
+
 def get_metric_definition(metric_name: str) -> dict[str, Any] | None:
     metrics = load_metric_definitions()
     normalized = metric_name.lower().strip().replace(" ", "_")
@@ -70,7 +74,7 @@ def _score_entry(query_tokens: set[str], key: str, entry: Any) -> int:
 
 def search_semantic_layer(query: str) -> dict[str, Any]:
     query_tokens = _tokens(query.replace("_", " "))
-    results: dict[str, Any] = {"metrics": {}, "ontology": {}, "glossary": {}}
+    results: dict[str, Any] = {"metrics": {}, "ontology": {}, "glossary": {}, "join_paths": {}}
 
     for key, entry in load_metric_definitions().items():
         exact = key.replace("_", " ") in query.lower().replace("-", " ")
@@ -86,6 +90,10 @@ def search_semantic_layer(query: str) -> dict[str, Any]:
         exact = key.lower() in query.lower().replace("-", " ")
         if exact or _score_entry(query_tokens, key, entry) >= 2:
             results["glossary"][key] = entry
+
+    for key, entry in load_join_paths().get("relationships", {}).items():
+        if _score_entry(query_tokens, key, entry) >= 2:
+            results["join_paths"][key] = entry
 
     return results
 
@@ -117,4 +125,12 @@ def get_relevant_semantic_context(user_question: str) -> str:
         for key, value in ontology.items():
             table = value.get("source_table", "unknown")
             sections.append(f"- {key}: {value.get('description', '')} Source table: {table}.")
+
+    join_paths = results.get("join_paths", {})
+    if join_paths:
+        sections.append("Join paths:")
+        for key, value in join_paths.items():
+            sections.append(f"- {key}: {value.get('join_condition', '')}")
+            if value.get("caution"):
+                sections.append(f"  Caution: {value['caution']}")
     return "\n".join(sections) if sections else "No directly matching semantic context found."

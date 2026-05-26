@@ -1,0 +1,76 @@
+relationships:
+  trials_to_sites:
+    left_table: trials
+    right_table: sites
+    join_type: one_to_many
+    join_condition: trials.trial_id = sites.trial_id
+    use_for:
+      - enrollment metrics
+      - site performance by trial
+      - trial country/site analysis
+
+  trials_to_patients:
+    left_table: trials
+    right_table: patients
+    join_type: one_to_many
+    join_condition: trials.trial_id = patients.trial_id
+    use_for:
+      - patient counts by trial
+      - treatment arm analysis
+      - patient demographics by trial
+
+  sites_to_patients:
+    left_table: sites
+    right_table: patients
+    join_type: one_to_many
+    join_condition: sites.site_id = patients.site_id
+    use_for:
+      - site-level patient summaries
+      - site enrollment validation
+
+  patients_to_adverse_events:
+    left_table: patients
+    right_table: adverse_events
+    join_type: one_to_many
+    join_condition: patients.patient_id = adverse_events.patient_id
+    use_for:
+      - adverse event rates per patient
+      - adverse events by treatment arm
+      - adverse events by patient subgroup
+
+  trials_to_adverse_events:
+    left_table: trials
+    right_table: adverse_events
+    join_type: one_to_many
+    join_condition: trials.trial_id = adverse_events.trial_id
+    use_for:
+      - adverse event counts by trial
+      - serious adverse event counts by trial
+
+  patients_to_lab_results:
+    left_table: patients
+    right_table: lab_results
+    join_type: one_to_many
+    join_condition: patients.patient_id = lab_results.patient_id
+    use_for:
+      - lab results by patient subgroup
+      - lab results by treatment arm
+
+  trials_to_lab_results:
+    left_table: trials
+    right_table: lab_results
+    join_type: one_to_many
+    join_condition: trials.trial_id = lab_results.trial_id
+    use_for:
+      - lab summaries by trial
+      - out-of-range lab rates by trial
+
+  trials_to_drug_sales:
+    left_table: trials
+    right_table: drug_sales
+    join_type: many_to_many_via_drug_name
+    join_condition: trials.drug_name = drug_sales.drug_name
+    caution: A drug can appear in multiple trials, so aggregate carefully to avoid duplicating sales.
+    use_for:
+      - combining trial portfolio context with commercial sales
+      - therapeutic area sales approximations

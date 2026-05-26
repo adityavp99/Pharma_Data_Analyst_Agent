@@ -58,6 +58,7 @@ def test_sample_sold_most_question_runs() -> None:
     assert result["sql_result"]["row_count"] > 0
     assert result["sql_result"]["columns"][:2] == ["drug_name", "units_sold"]
     assert "was sold the most" in result["answer"]
+    assert result["planner_source"] == "metric_sql_builder"
 
 
 def test_sample_trend_question_returns_chart_plan() -> None:

@@ -7,7 +7,14 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tools.semantic_tool import get_metric_definition, get_relevant_semantic_context, load_business_glossary, load_metric_definitions, load_ontology
+from tools.semantic_tool import (
+    get_metric_definition,
+    get_relevant_semantic_context,
+    load_business_glossary,
+    load_join_paths,
+    load_metric_definitions,
+    load_ontology,
+)
 
 
 def test_metric_definitions_load() -> None:
@@ -33,3 +40,9 @@ def test_relevant_semantic_context_keyword_search() -> None:
     context = get_relevant_semantic_context("What is the enrollment rate?")
     assert "enrollment_rate" in context
     assert "Enrollment rate" in context
+
+
+def test_join_paths_load() -> None:
+    joins = load_join_paths()
+    assert "relationships" in joins
+    assert joins["relationships"]["trials_to_sites"]["join_condition"] == "trials.trial_id = sites.trial_id"

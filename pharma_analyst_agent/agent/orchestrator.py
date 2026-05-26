@@ -6,6 +6,7 @@ import re
 
 from agent.llm_summary import summarize_for_business_user
 from agent.response_formatter import format_final_answer
+from agent.sql_planner import plan_query
 from agent.tool_router import route_question
 from tools.python_tool import (
     calculate_correlation,
@@ -383,7 +384,7 @@ def answer_question(user_question: str, db_path: str | Path) -> dict[str, Any]:
             "chart_plan": None,
         }
 
-    plan = generate_sql_plan(user_question)
+    plan = plan_query(user_question, db_path)
     sql_result = run_readonly_sql(plan["sql"], str(db_path), max_rows=plan.get("max_rows", 200))
     python_result = None
     if routing["needs_python"] and "error" not in sql_result:
@@ -414,4 +415,5 @@ def answer_question(user_question: str, db_path: str | Path) -> dict[str, Any]:
         "sql_result": sql_result,
         "python_result": python_result,
         "chart_plan": _recommend_chart(sql_result, python_result),
+        "planner_source": plan.get("planner_source", "unknown"),
     }
