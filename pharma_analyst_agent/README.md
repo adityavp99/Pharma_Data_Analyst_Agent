@@ -94,6 +94,8 @@ The flow is:
 6. `tools/python_tool.py` runs only predefined analysis functions when extra post-query computation is needed.
 7. `agent/response_formatter.py` formats the final answer with evidence, SQL, assumptions, and limitations.
 
+For a detailed workbook that explains the full flow, LLM usage, SQL planning, charting, testing, and datamart/Tableau migration path, see [`docs/agent_workbook.md`](docs/agent_workbook.md).
+
 ## Safety Notes
 
 - All data is synthetic.
