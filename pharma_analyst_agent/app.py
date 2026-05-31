@@ -12,9 +12,11 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from agent.chart_vision import infer_chart_plan_from_screenshot
 from agent.orchestrator import answer_question
 from agent.response_formatter import summarize_python_result
-from config import DB_PATH
+from config import DB_PATH, PROCESSED_DATA_DIR
+from tools.csv_tool import load_csv_to_sqlite, safe_table_name
 from tools.schema_tool import get_table_row_counts
 
 
@@ -152,15 +154,25 @@ def render_chart(result: dict[str, Any]) -> None:
         frame["_period"] = pd.to_datetime(frame["_period"], errors="coerce")
 
     x_type = "T" if x_col in {"month", "_period", "result_date", "event_date"} else "N" if pd.api.types.is_numeric_dtype(frame[x_col]) else "O"
+    tooltip_cols = [
+        col
+        for col in frame.columns
+        if col in {x_col, y_col, group_by, "country", "region", "trial_id", "drug_name", "test_name"}
+    ]
     base = alt.Chart(frame).encode(
         x=alt.X(f"{x_col}:{x_type}", title=x_col.replace("_", " ").title()),
         y=alt.Y(f"{y_col}:Q", title=y_col.replace("_", " ").title()),
-        tooltip=[col for col in frame.columns if col in {x_col, y_col, group_by, "country", "region", "trial_id", "drug_name", "test_name"}],
+        tooltip=tooltip_cols,
     )
     if group_by and group_by in frame.columns:
         base = base.encode(color=alt.Color(f"{group_by}:N", title=group_by.replace("_", " ").title()))
 
-    chart = base.mark_line(point=True) if chart_type == "line" else base.mark_bar()
+    if chart_type == "line":
+        chart = base.mark_line(point=True)
+    elif chart_type == "scatter":
+        chart = base.mark_circle(size=90)
+    else:
+        chart = base.mark_bar()
     st.altair_chart(chart.properties(title=chart_plan.get("title", "Chart")), use_container_width=True)
 
 
@@ -195,13 +207,31 @@ st.set_page_config(page_title="Pharma Analyst Agent MVP", layout="wide")
 st.title("Pharma Analyst Agent MVP")
 st.caption("Ask business questions over synthetic pharma-style trial, safety, lab, and sales data.")
 
-if not DB_PATH.exists():
-    st.warning("Database not found. Run `python scripts/generate_synthetic_data.py` and `python scripts/load_sqlite.py` first.")
+st.subheader("Data source")
+uploaded_csv = st.file_uploader("Upload a CSV to test agentic analysis on your own data", type=["csv"])
+uploaded_chart = st.file_uploader("Optional: upload a Tableau/chart screenshot to mimic", type=["png", "jpg", "jpeg"])
+
+active_db_path = DB_PATH
+force_llm_planner = False
+uploaded_info = None
+if uploaded_csv is not None:
+    table_name = safe_table_name(uploaded_csv.name)
+    uploaded_db_path = PROCESSED_DATA_DIR / "uploaded_runtime.db"
+    uploaded_csv.seek(0)
+    uploaded_info = load_csv_to_sqlite(uploaded_csv, uploaded_db_path, table_name=table_name)
+    active_db_path = uploaded_db_path
+    force_llm_planner = True
+    st.success(
+        f"Using uploaded CSV table `{table_name}` with {uploaded_info['rows']:,} rows and "
+        f"{len(uploaded_info['columns'])} columns. LLM-first planning is enabled for this file."
+    )
+elif not DB_PATH.exists():
+    st.warning("Database not found. Upload a CSV, or run `python scripts/generate_synthetic_data.py` and `python scripts/load_sqlite.py`.")
     st.stop()
 
 with st.sidebar:
-    st.subheader("Synthetic database")
-    counts = get_table_row_counts(DB_PATH)
+    st.subheader("Active database")
+    counts = get_table_row_counts(active_db_path)
     st.dataframe(pd.DataFrame([{"table": key, "rows": value} for key, value in counts.items()]), hide_index=True)
     with st.expander("Data catalog", expanded=False):
         st.dataframe(pd.DataFrame(TABLE_CATALOG), hide_index=True, use_container_width=True)
@@ -224,8 +254,19 @@ with st.expander("What data can I ask about?", expanded=False):
     st.dataframe(pd.DataFrame(TABLE_CATALOG), hide_index=True, use_container_width=True)
 
 if st.button("Analyze", type="primary") and question:
-    with st.spinner("Routing tools and analyzing synthetic data..."):
-        result = answer_question(question, DB_PATH)
+    with st.spinner("Routing tools and analyzing data..."):
+        result = answer_question(question, active_db_path, force_llm_planner=force_llm_planner)
+
+    if uploaded_chart is not None and result.get("sql_result") and "error" not in result["sql_result"]:
+        image_bytes = uploaded_chart.getvalue()
+        columns = result["sql_result"].get("columns", [])
+        try:
+            screenshot_plan = infer_chart_plan_from_screenshot(image_bytes, columns, question)
+            if screenshot_plan:
+                result["chart_plan"] = screenshot_plan
+                st.info("Chart plan was guided by the uploaded screenshot.")
+        except Exception as exc:
+            st.warning(f"Could not use screenshot for chart planning: {exc}")
 
     if result.get("business_summary"):
         st.success(result["business_summary"])

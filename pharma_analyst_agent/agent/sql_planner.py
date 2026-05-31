@@ -5,10 +5,10 @@ from typing import Any
 import json
 import re
 
-from openai import OpenAI
-
 from agent.context_builder import build_llm_context
-from config import ENABLE_LLM_PLANNER, OPENROUTER_API_KEY, OPENROUTER_PLANNER_MODEL
+from agent.llm_client import get_llm_client
+from config import ENABLE_LLM_PLANNER
+from tools.schema_tool import get_schema
 from tools.metric_sql_builder import build_metric_plan_from_question
 from tools.sql_tool import validate_sql
 
@@ -48,24 +48,34 @@ def _normalize_python_plan(plan: dict[str, Any]) -> dict[str, Any] | None:
     return {"function": function_name, "arguments": recommended.get("arguments", {})}
 
 
-def _llm_plan(user_question: str, db_path: str | Path) -> dict[str, Any] | None:
-    if not ENABLE_LLM_PLANNER or not OPENROUTER_API_KEY:
+def _llm_plan(user_question: str, db_path: str | Path, mode: str = "pharma") -> dict[str, Any] | None:
+    if not ENABLE_LLM_PLANNER:
+        return None
+
+    client, model, provider = get_llm_client()
+    if client is None:
         return None
 
     context = build_llm_context(user_question, db_path)
-    client = OpenAI(api_key=OPENROUTER_API_KEY, base_url="https://openrouter.ai/api/v1")
+    domain_instruction = (
+        "You are a SQL planning agent for synthetic pharma analytics."
+        if mode == "pharma"
+        else "You are a SQL planning agent for a user-uploaded CSV loaded into SQLite."
+    )
     response = client.chat.completions.create(
-        model=OPENROUTER_PLANNER_MODEL,
+        model=model,
         temperature=0,
         messages=[
             {
                 "role": "system",
                 "content": (
-                    "You are a SQL planning agent for synthetic pharma analytics. "
+                    f"{domain_instruction} "
                     "Return only JSON. Generate one SQLite SELECT or WITH query only. "
-                    "Use only the provided tables, columns, metric definitions, and join paths. "
+                    "Use only the provided tables and columns. "
+                    "Use semantic metric definitions and join paths when provided. "
                     "Prefer aggregate outputs. Do not output patient-level details unless explicitly necessary. "
-                    "For adverse event analysis, do not infer causality."
+                    "For adverse event analysis, do not infer causality. "
+                    "If a chart is requested, return SQL that provides the needed x/y/group fields."
                 ),
             },
             {
@@ -94,7 +104,7 @@ def _llm_plan(user_question: str, db_path: str | Path) -> dict[str, Any] | None:
         "explanation": parsed.get("explanation", "LLM planner generated SQL using semantic and schema context."),
         "assumptions": parsed.get("assumptions", []),
         "python": _normalize_python_plan(parsed),
-        "planner_source": "llm_openrouter",
+        "planner_source": f"llm_{provider}",
     }
 
 
@@ -209,7 +219,30 @@ LIMIT 10
     }
 
 
-def plan_query(user_question: str, db_path: str | Path) -> dict[str, Any]:
+def _fallback_uploaded_csv_plan(db_path: str | Path) -> dict[str, Any]:
+    schema = get_schema(db_path)
+    first_table = next(iter(schema), None)
+    if not first_table:
+        return _fallback_portfolio_plan()
+    return {
+        "sql": f"SELECT * FROM {first_table} LIMIT 20",
+        "explanation": "No LLM plan was available, so the agent returned a preview of the uploaded CSV table.",
+        "assumptions": ["Configure OPENAI_API_KEY or OPENROUTER_API_KEY to enable agentic SQL planning over uploaded CSV files."],
+        "python": None,
+        "planner_source": "uploaded_csv_preview_fallback",
+    }
+
+
+def plan_query(user_question: str, db_path: str | Path, force_llm_first: bool = False) -> dict[str, Any]:
+    if force_llm_first:
+        try:
+            llm_plan = _llm_plan(user_question, db_path, mode="uploaded_csv")
+        except Exception:
+            llm_plan = None
+        if llm_plan:
+            return llm_plan
+        return _fallback_uploaded_csv_plan(db_path)
+
     python_plan = _python_first_plan(user_question)
     if python_plan:
         return python_plan
@@ -218,7 +251,10 @@ def plan_query(user_question: str, db_path: str | Path) -> dict[str, Any]:
     if metric_plan:
         return metric_plan
 
-    llm_plan = _llm_plan(user_question, db_path)
+    try:
+        llm_plan = _llm_plan(user_question, db_path, mode="pharma")
+    except Exception:
+        llm_plan = None
     if llm_plan:
         return llm_plan
 

@@ -369,7 +369,7 @@ def _recommend_chart(sql_result: dict[str, Any] | None, python_result: dict[str,
     }
 
 
-def answer_question(user_question: str, db_path: str | Path) -> dict[str, Any]:
+def answer_question(user_question: str, db_path: str | Path, force_llm_planner: bool = False) -> dict[str, Any]:
     routing = route_question(user_question)
     semantic_context = get_relevant_semantic_context(user_question) if routing["needs_semantic_context"] else ""
     schema_text = get_schema_text(db_path) if routing["needs_sql"] else ""
@@ -384,7 +384,7 @@ def answer_question(user_question: str, db_path: str | Path) -> dict[str, Any]:
             "chart_plan": None,
         }
 
-    plan = plan_query(user_question, db_path)
+    plan = plan_query(user_question, db_path, force_llm_first=force_llm_planner)
     sql_result = run_readonly_sql(plan["sql"], str(db_path), max_rows=plan.get("max_rows", 200))
     python_result = None
     if routing["needs_python"] and "error" not in sql_result:

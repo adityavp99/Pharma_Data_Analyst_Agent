@@ -96,6 +96,8 @@ The flow is:
 
 For a detailed workbook that explains the full flow, LLM usage, SQL planning, charting, testing, and datamart/Tableau migration path, see [`docs/agent_workbook.md`](docs/agent_workbook.md).
 
+For quick agentic testing with your own CSV file and optional Tableau/chart screenshot, see [`docs/agentic_csv_testing.md`](docs/agentic_csv_testing.md).
+
 ## Safety Notes
 
 - All data is synthetic.

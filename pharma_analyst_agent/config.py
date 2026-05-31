@@ -18,11 +18,15 @@ DB_PATH = resolve_project_path(os.getenv("PHARMA_DB_PATH", "data/processed/pharm
 MAX_SQL_ROWS = int(os.getenv("MAX_SQL_ROWS", "200"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").strip().lower()
+OPENAI_PLANNER_MODEL = os.getenv("OPENAI_PLANNER_MODEL", OPENAI_MODEL)
+OPENAI_VISION_MODEL = os.getenv("OPENAI_VISION_MODEL", OPENAI_MODEL)
 AI_SUMMARY_PROVIDER = os.getenv("AI_SUMMARY_PROVIDER", "").strip().lower()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_SUMMARY_MODEL = os.getenv("OPENROUTER_SUMMARY_MODEL", "deepseek/deepseek-v4-flash:free")
 ENABLE_LLM_PLANNER = os.getenv("ENABLE_LLM_PLANNER", "true").strip().lower() in {"1", "true", "yes"}
 OPENROUTER_PLANNER_MODEL = os.getenv("OPENROUTER_PLANNER_MODEL", "deepseek/deepseek-v4-flash:free")
+OPENROUTER_VISION_MODEL = os.getenv("OPENROUTER_VISION_MODEL", OPENROUTER_PLANNER_MODEL)
 
 RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
 PROCESSED_DATA_DIR = PROJECT_ROOT / "data" / "processed"
