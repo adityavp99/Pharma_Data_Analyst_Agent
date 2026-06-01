@@ -1137,7 +1137,7 @@ Current limitations:
 
 No for the synthetic pharma mode. Known workflows use deterministic templates and metric SQL builders. The LLM is used as a fallback planner when those do not cover the question and an LLM provider is configured.
 
-For uploaded CSV mode, yes, the workflow is more agentic: the app loads the CSV into SQLite, sends the live schema to the LLM, asks the LLM to generate SQL, validates that SQL, and then executes it read-only. Profile questions such as "what kind of data is this?" use a safe preview path so the user can inspect columns before asking deeper questions.
+For uploaded CSV mode, yes, the workflow is more agentic: the app loads the CSV into SQLite, sends the live schema and sample rows to the LLM, asks the LLM to generate SQL, validates that SQL, and then executes it read-only. Profile questions such as "what kind of data is this?" go through the CSV agent path and are summarized from the returned rows/columns. If the LLM fails in this mode, the app reports `llm_failed` instead of showing an unrelated fallback answer.
 
 ### Q: Why not let the LLM write everything?
 

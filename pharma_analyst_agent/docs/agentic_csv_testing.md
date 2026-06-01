@@ -107,8 +107,10 @@ llm_openrouter
 If no key is configured, it will show:
 
 ```text
-uploaded_csv_preview_fallback
+llm_failed
 ```
+
+In the focused CSV test mode, unrelated fallback answers are disabled. If the LLM is not configured or the LLM call fails, the app will explicitly say the agentic task failed.
 
 ## 5. Example CSV Questions
 
@@ -128,6 +130,7 @@ Use questions like:
 The LLM sees the uploaded table schema and generates SQLite SQL.
 
 For preview/profile questions, the app intentionally returns a safe row preview first. That helps you inspect available columns before asking analytical questions.
+The query is still planned through the CSV agent path; after the SQL result comes back, the configured LLM summarizes the columns and sample rows in plain English.
 
 ## 6. Test With A Tableau Screenshot
 

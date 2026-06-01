@@ -42,3 +42,38 @@ def summarize_for_business_user(
         ],
     )
     return content
+
+
+def summarize_csv_result_for_user(
+    user_question: str,
+    sql_result: dict[str, Any] | None,
+    sql: str | None,
+) -> str | None:
+    if not sql_result or "error" in sql_result:
+        return None
+
+    preview = {
+        "columns": sql_result.get("columns", []),
+        "row_count": sql_result.get("row_count", 0),
+        "sample_rows": sql_result.get("rows", [])[:20],
+        "sql": sql,
+    }
+    content, _provider = complete_chat(
+        temperature=0,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a CSV data analyst. Explain the query result to a nontechnical user. "
+                    "Use only the provided columns, rows, and SQL. Do not invent facts. "
+                    "If the user is asking what the file contains, describe the likely subject matter, "
+                    "important columns, example values, and useful follow-up questions."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Question: {user_question}\n\nResult preview: {preview}",
+            },
+        ],
+    )
+    return content

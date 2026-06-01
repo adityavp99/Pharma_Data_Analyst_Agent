@@ -51,12 +51,16 @@ def _custom_chat_completion(messages: list[dict[str, Any]], temperature: float, 
 
 
 def get_llm_client() -> tuple[OpenAI | None, str, str]:
-    if LLM_PROVIDER == "custom_openai":
+    effective_provider = LLM_PROVIDER
+    if LLM_PROVIDER == "openai" and not OPENAI_API_KEY and OPENROUTER_API_KEY:
+        effective_provider = "openrouter"
+
+    if effective_provider == "custom_openai":
         if not CUSTOM_OPENAI_CHAT_URL or not CUSTOM_OPENAI_API_KEY:
             return None, "", "custom_openai"
         return None, CUSTOM_OPENAI_PLANNER_MODEL, "custom_openai"
 
-    if LLM_PROVIDER == "openrouter":
+    if effective_provider == "openrouter":
         if not OPENROUTER_API_KEY:
             return None, "", "openrouter"
         return OpenAI(api_key=OPENROUTER_API_KEY, base_url="https://openrouter.ai/api/v1"), OPENROUTER_PLANNER_MODEL, "openrouter"
@@ -67,12 +71,16 @@ def get_llm_client() -> tuple[OpenAI | None, str, str]:
 
 
 def get_vision_client() -> tuple[OpenAI | None, str, str]:
-    if LLM_PROVIDER == "custom_openai":
+    effective_provider = LLM_PROVIDER
+    if LLM_PROVIDER == "openai" and not OPENAI_API_KEY and OPENROUTER_API_KEY:
+        effective_provider = "openrouter"
+
+    if effective_provider == "custom_openai":
         if not CUSTOM_OPENAI_CHAT_URL or not CUSTOM_OPENAI_API_KEY:
             return None, "", "custom_openai"
         return None, CUSTOM_OPENAI_VISION_MODEL, "custom_openai"
 
-    if LLM_PROVIDER == "openrouter":
+    if effective_provider == "openrouter":
         if not OPENROUTER_API_KEY:
             return None, "", "openrouter"
         return OpenAI(api_key=OPENROUTER_API_KEY, base_url="https://openrouter.ai/api/v1"), OPENROUTER_VISION_MODEL, "openrouter"

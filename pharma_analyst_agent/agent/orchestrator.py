@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 import re
 
-from agent.llm_summary import summarize_for_business_user
+from agent.llm_summary import summarize_csv_result_for_user, summarize_for_business_user
 from agent.response_formatter import format_final_answer
 from agent.sql_planner import plan_query
 from agent.tool_router import route_question
@@ -385,6 +385,26 @@ def answer_question(user_question: str, db_path: str | Path, force_llm_planner: 
         }
 
     plan = plan_query(user_question, db_path, force_llm_first=force_llm_planner)
+    if plan.get("error"):
+        return {
+            "answer": (
+                "Answer:\n"
+                f"{plan['error']}\n\n"
+                "What this means:\n"
+                "The uploaded CSV agent mode requires a working LLM provider. "
+                "Check your provider settings, API key, model name, and network access.\n\n"
+                f"Technical detail:\n{plan.get('error_detail', 'No additional detail returned.')}"
+            ),
+            "business_summary": None,
+            "routing": routing,
+            "semantic_context": semantic_context,
+            "schema_text": schema_text,
+            "sql": None,
+            "sql_result": None,
+            "python_result": None,
+            "chart_plan": None,
+            "planner_source": plan.get("planner_source", "llm_failed"),
+        }
     sql_result = run_readonly_sql(plan["sql"], str(db_path), max_rows=plan.get("max_rows", 200))
     python_result = None
     if routing["needs_python"] and "error" not in sql_result:
@@ -402,9 +422,12 @@ def answer_question(user_question: str, db_path: str | Path, force_llm_planner: 
     )
     business_summary = None
     try:
-        business_summary = summarize_for_business_user(user_question, sql_result, answer)
+        if force_llm_planner:
+            business_summary = summarize_csv_result_for_user(user_question, sql_result, plan["sql"])
+        else:
+            business_summary = summarize_for_business_user(user_question, sql_result, answer)
     except Exception as exc:
-        business_summary = f"OpenRouter summary unavailable: {exc}"
+        business_summary = f"LLM summary unavailable: {exc}"
     return {
         "answer": answer,
         "business_summary": business_summary,

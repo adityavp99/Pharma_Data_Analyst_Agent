@@ -15,99 +15,9 @@ if str(ROOT) not in sys.path:
 from agent.chart_vision import infer_chart_plan_from_screenshot
 from agent.orchestrator import answer_question
 from agent.response_formatter import summarize_python_result
-from config import DB_PATH, PROCESSED_DATA_DIR
+from config import LLM_PROVIDER, OPENROUTER_API_KEY, PROCESSED_DATA_DIR
 from tools.csv_tool import load_csv_to_sqlite, safe_table_name
 from tools.schema_tool import get_table_row_counts
-
-
-QUESTION_TEMPLATES = {
-    "Semantic only": [
-        "What does enrollment rate mean?",
-        "Define serious adverse event.",
-        "What is an out-of-range lab result?",
-    ],
-    "SQL only": [
-        "Which drug was sold the most?",
-        "Which drug had the highest net sales?",
-        "Which trials have the highest enrollment rate?",
-        "Show the top 10 trials by serious adverse event count.",
-        "What is the out-of-range lab rate by test?",
-    ],
-    "Semantic + SQL": [
-        "Using the enrollment rate definition, which trials have the highest enrollment rate?",
-        "Using the serious adverse event definition, show the top 10 trials by serious adverse event count.",
-        "Using the net sales definition, which drug had the highest net sales?",
-    ],
-    "SQL + Python": [
-        "Show monthly net sales trend by drug.",
-        "Calculate percentage change in monthly net sales by drug.",
-        "Find outliers in monthly net sales.",
-        "What is the correlation between enrolled patients and adverse event count?",
-    ],
-    "Semantic + SQL + Python": [
-        "Using the net sales definition, show monthly net sales trend by drug.",
-        "Using the adverse event definition, what is the correlation between enrolled patients and adverse event count?",
-        "Using the net sales definition, find outliers in monthly net sales.",
-    ],
-    "Safety refusal": [
-        "Which drug should this patient take?",
-        "Did the drug cause these serious adverse events?",
-    ],
-}
-
-
-TABLE_CATALOG = [
-    {
-        "table": "trials",
-        "what_it_contains": "One row per synthetic clinical trial.",
-        "use_it_for": "Trial portfolio summaries, phase/status breakdowns, therapeutic area analysis, trial-to-drug mapping.",
-        "key_columns": "trial_id, phase, therapeutic_area, drug_name, indication, status, country, planned_enrollment",
-        "example_questions": "How many trials are in each therapeutic area? Which trials are recruiting? Which drugs are studied in Oncology?",
-    },
-    {
-        "table": "sites",
-        "what_it_contains": "Synthetic trial sites and enrollment performance.",
-        "use_it_for": "Enrollment rate, enrollment gap, country/site contribution, site-level performance.",
-        "key_columns": "site_id, trial_id, country, investigator_name, enrollment_target, enrolled_patients",
-        "example_questions": "Which trials have the highest enrollment gap? Which countries enrolled the most patients?",
-    },
-    {
-        "table": "patients",
-        "what_it_contains": "Synthetic participant records with coarse demographics only.",
-        "use_it_for": "Aggregate patient counts by trial, site, age group, sex, baseline condition, or treatment arm.",
-        "key_columns": "patient_id, trial_id, site_id, age_group, sex, baseline_condition, treatment_arm",
-        "example_questions": "How many patients are in each treatment arm? What is the patient mix by age group?",
-    },
-    {
-        "table": "adverse_events",
-        "what_it_contains": "Synthetic adverse event records linked to synthetic patients and trials.",
-        "use_it_for": "Descriptive AE counts, serious AE counts, related AE counts, AE rates per patient.",
-        "key_columns": "ae_id, patient_id, trial_id, event_term, severity, seriousness, outcome, event_date, related_to_drug",
-        "example_questions": "Which trials have the most serious adverse events? What are the most common AE terms?",
-    },
-    {
-        "table": "lab_results",
-        "what_it_contains": "Synthetic lab measurements with simplified normal ranges.",
-        "use_it_for": "Out-of-range lab rates, lab summaries by test, abnormal lab monitoring.",
-        "key_columns": "lab_id, patient_id, trial_id, test_name, result_value, unit, normal_low, normal_high, result_date",
-        "example_questions": "Which lab test has the highest out-of-range rate? What are ALT summary statistics?",
-    },
-    {
-        "table": "drug_sales",
-        "what_it_contains": "Synthetic monthly commercial sales by drug, country, region, and channel.",
-        "use_it_for": "Units sold, net sales, net sales per unit, country/region/channel sales trends.",
-        "key_columns": "sale_id, drug_name, country, region, month, units_sold, net_sales, channel, currency",
-        "example_questions": "Which drug sold the most? What is the monthly sales trend by drug? Which country has the highest net sales?",
-    },
-]
-
-
-def _all_examples() -> list[str]:
-    return [question for questions in QUESTION_TEMPLATES.values() for question in questions]
-
-
-def _apply_template() -> None:
-    st.session_state.question = st.session_state.selected_template
 
 
 def _result_frame(result: dict[str, Any]) -> pd.DataFrame:
@@ -203,15 +113,22 @@ def render_python_result(result: dict[str, Any]) -> None:
         st.json(python_result)
 
 
-st.set_page_config(page_title="Pharma Analyst Agent MVP", layout="wide")
-st.title("Pharma Analyst Agent MVP")
-st.caption("Ask business questions over synthetic pharma-style trial, safety, lab, and sales data.")
+st.set_page_config(page_title="CSV Analyst Agent Lab", layout="wide")
+st.title("CSV Analyst Agent Lab")
+st.caption("Upload a CSV and ask open-ended analytical questions. This mode requires a working LLM provider.")
 
 st.subheader("Data source")
 uploaded_csv = st.file_uploader("Upload a CSV to test agentic analysis on your own data", type=["csv"])
 uploaded_chart = st.file_uploader("Optional: upload a Tableau/chart screenshot to mimic", type=["png", "jpg", "jpeg"])
 
-active_db_path = DB_PATH
+provider_note = LLM_PROVIDER
+if LLM_PROVIDER == "openai" and not OPENROUTER_API_KEY:
+    provider_note = "openai"
+elif LLM_PROVIDER == "openai" and OPENROUTER_API_KEY:
+    provider_note = "openrouter auto-selected because OPENROUTER_API_KEY is present"
+st.info(f"Configured LLM provider: {provider_note}")
+
+active_db_path = None
 force_llm_planner = False
 uploaded_info = None
 if uploaded_csv is not None:
@@ -225,37 +142,34 @@ if uploaded_csv is not None:
         f"Using uploaded CSV table `{table_name}` with {uploaded_info['rows']:,} rows and "
         f"{len(uploaded_info['columns'])} columns. LLM-first planning is enabled for this file."
     )
-elif not DB_PATH.exists():
-    st.warning("Database not found. Upload a CSV, or run `python scripts/generate_synthetic_data.py` and `python scripts/load_sqlite.py`.")
+else:
+    st.warning("Upload a CSV to begin. The synthetic pharma templates are hidden in this focused agentic test mode.")
     st.stop()
 
 with st.sidebar:
-    st.subheader("Active database")
-    counts = get_table_row_counts(active_db_path)
-    st.dataframe(pd.DataFrame([{"table": key, "rows": value} for key, value in counts.items()]), hide_index=True)
-    with st.expander("Data catalog", expanded=False):
-        st.dataframe(pd.DataFrame(TABLE_CATALOG), hide_index=True, use_container_width=True)
+    st.subheader("Uploaded CSV")
+    if active_db_path is not None:
+        counts = get_table_row_counts(active_db_path)
+        st.dataframe(pd.DataFrame([{"table": key, "rows": value} for key, value in counts.items()]), hide_index=True)
+    if uploaded_info:
+        st.write("Columns")
+        st.write(uploaded_info["columns"])
 
-if "question" not in st.session_state:
-    st.session_state.question = _all_examples()[0]
-
-template_group = st.selectbox("Question type", list(QUESTION_TEMPLATES))
-st.selectbox(
-    "Question template",
-    QUESTION_TEMPLATES[template_group],
-    key="selected_template",
-    on_change=_apply_template,
+question = st.text_area(
+    "Ask a question about the uploaded CSV",
+    placeholder=(
+        "Examples:\n"
+        "- What kind of data does this file contain? Show me sample rows and columns.\n"
+        "- Summarize this file so I know what questions to ask.\n"
+        "- Show total sales by product.\n"
+        "- Create a line chart of revenue by month grouped by region."
+    ),
+    height=150,
 )
-st.button("Use selected template", on_click=_apply_template)
-
-question = st.text_input("Ask an analytical question", key="question")
-
-with st.expander("What data can I ask about?", expanded=False):
-    st.dataframe(pd.DataFrame(TABLE_CATALOG), hide_index=True, use_container_width=True)
 
 if st.button("Analyze", type="primary") and question:
     with st.spinner("Routing tools and analyzing data..."):
-        result = answer_question(question, active_db_path, force_llm_planner=force_llm_planner)
+        result = answer_question(question, active_db_path, force_llm_planner=True)
 
     if uploaded_chart is not None and result.get("sql_result") and "error" not in result["sql_result"]:
         image_bytes = uploaded_chart.getvalue()
@@ -270,6 +184,9 @@ if st.button("Analyze", type="primary") and question:
 
     if result.get("business_summary"):
         st.success(result["business_summary"])
+
+    if result.get("planner_source") == "llm_failed":
+        st.error("LLM was not used successfully. The agentic task failed and no unrelated fallback answer was returned.")
 
     st.markdown(result["answer"])
 
@@ -292,11 +209,11 @@ if st.button("Analyze", type="primary") and question:
 
     with tabs[2]:
         st.write("The app uses a simple agent workflow:")
-        st.write("1. Route the question to semantic definitions, SQL, Python, or safe refusal.")
-        st.write("2. Add business definitions from the semantic layer when useful.")
-        st.write("3. Run only read-only SQL against the synthetic SQLite database.")
-        st.write("4. Run controlled Python only for trends, percentage change, summaries, or outliers.")
-        st.write("5. Show the evidence, SQL, assumptions, and limitations.")
+        st.write("1. Load the uploaded CSV into a temporary SQLite table.")
+        st.write("2. Send the CSV schema and sample rows to the configured LLM.")
+        st.write("3. Ask the LLM to generate one safe SQLite SELECT/WITH query.")
+        st.write("4. Validate the SQL before execution.")
+        st.write("5. Render answer, SQL, table, and chart if the LLM plan succeeds.")
         st.write(f"Planner source: `{result.get('planner_source', 'not applicable')}`")
         st.json(result.get("routing", {}))
         if result.get("chart_plan"):

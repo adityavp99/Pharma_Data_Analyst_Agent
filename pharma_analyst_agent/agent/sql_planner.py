@@ -70,7 +70,9 @@ def _llm_plan(user_question: str, db_path: str | Path, mode: str = "pharma") -> 
                     "Use semantic metric definitions and join paths when provided. "
                     "Prefer aggregate outputs. Do not output patient-level details unless explicitly necessary. "
                     "For adverse event analysis, do not infer causality. "
-                    "If a chart is requested, return SQL that provides the needed x/y/group fields."
+                    "If a chart is requested, return SQL that provides the needed x/y/group fields. "
+                    "If the user asks what the uploaded file contains, describe, preview, or summarize the columns, "
+                    "generate a simple SELECT query that returns representative rows and useful columns."
                 ),
             },
             {
@@ -91,7 +93,7 @@ def _llm_plan(user_question: str, db_path: str | Path, mode: str = "pharma") -> 
         ],
     )
     if content is None:
-        return None
+        raise RuntimeError(f"LLM provider '{provider}' was not configured or returned no content.")
     parsed = _extract_json(content)
     sql = parsed.get("sql", "")
     validate_sql(sql)
@@ -229,46 +231,28 @@ def _fallback_uploaded_csv_plan(db_path: str | Path) -> dict[str, Any]:
     }
 
 
-def _uploaded_csv_profile_plan(db_path: str | Path) -> dict[str, Any] | None:
-    schema = get_schema(db_path)
-    first_table = next(iter(schema), None)
-    if not first_table:
-        return None
-    return {
-        "sql": f"SELECT * FROM {first_table} LIMIT 10",
-        "explanation": (
-            "The uploaded CSV was profiled by returning a row preview. "
-            "Use the result table columns and sample rows to decide what analytical questions to ask next."
-        ),
-        "assumptions": ["This is a preview/profile response, not an aggregate analysis."],
-        "python": None,
-        "planner_source": "uploaded_csv_profile",
-    }
-
-
 def plan_query(user_question: str, db_path: str | Path, force_llm_first: bool = False) -> dict[str, Any]:
     if force_llm_first:
-        if _mentions(
-            user_question,
-            "what kind of data",
-            "what data",
-            "describe",
-            "summary of columns",
-            "snippet",
-            "sample rows",
-            "preview",
-            "rows and columns",
-        ):
-            profile_plan = _uploaded_csv_profile_plan(db_path)
-            if profile_plan:
-                return profile_plan
         try:
             llm_plan = _llm_plan(user_question, db_path, mode="uploaded_csv")
-        except Exception:
-            llm_plan = None
+        except Exception as exc:
+            return {
+                "error": (
+                    "Agentic LLM planning failed for the uploaded CSV. "
+                    "No fallback answer was used."
+                ),
+                "error_detail": str(exc),
+                "planner_source": "llm_failed",
+                "llm_used": False,
+            }
         if llm_plan:
+            llm_plan["llm_used"] = True
             return llm_plan
-        return _fallback_uploaded_csv_plan(db_path)
+        return {
+            "error": "Agentic LLM planning returned no plan for the uploaded CSV. No fallback answer was used.",
+            "planner_source": "llm_failed",
+            "llm_used": False,
+        }
 
     python_plan = _python_first_plan(user_question)
     if python_plan:
