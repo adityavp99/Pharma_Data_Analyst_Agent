@@ -46,7 +46,26 @@ OPENROUTER_VISION_MODEL=deepseek/deepseek-v4-flash:free
 OPENAI_API_KEY=
 ```
 
-### Option C: Enterprise/custom OpenAI-compatible endpoint
+### Option C: Company Azure OpenAI endpoint through the internal gateway
+
+Use this for the J&J-style Azure OpenAI setup.
+
+```bash
+LLM_PROVIDER=azure_openai
+AZURE_OPENAI_API_KEY=your_company_key_here
+AZURE_OPENAI_ENDPOINT=https://genaiapimna.jnj.com/openai-chat
+AZURE_OPENAI_DEPLOYMENT=gpt-4o-mini
+AZURE_OPENAI_API_VERSION=2024-10-21
+AZURE_OPENAI_VISION_DEPLOYMENT=gpt-4o-mini
+```
+
+Important: do not put the full `/openai/deployments/<MODEL_NAME>/chat/completions?...` URL in `AZURE_OPENAI_ENDPOINT`. The Azure OpenAI SDK builds that route internally. Use only the endpoint root:
+
+```text
+https://genaiapimna.jnj.com/openai-chat
+```
+
+### Option D: Enterprise/custom direct HTTP endpoint
 
 Use this when your organization gives you a full chat-completions endpoint URL and expects an `api-key` header, for example:
 
@@ -68,7 +87,7 @@ CUSTOM_OPENAI_PLANNER_MODEL=
 CUSTOM_OPENAI_VISION_MODEL=
 ```
 
-Leave the public OpenAI/OpenRouter keys blank if you are using the enterprise endpoint.
+Leave the public OpenAI/OpenRouter keys blank if you are using the company endpoint.
 
 Important: not every OpenRouter free model supports image input. If screenshot chart replication fails, use OpenAI vision or an OpenRouter model that supports images.
 

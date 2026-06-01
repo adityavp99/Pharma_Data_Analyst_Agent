@@ -1169,7 +1169,9 @@ The Streamlit app should eventually be replaced by an API. Your platform fronten
 
 ### Q: How do we connect to an enterprise OpenAI-compatible endpoint?
 
-Set `LLM_PROVIDER=custom_openai`, put the full chat-completions URL in `CUSTOM_OPENAI_CHAT_URL`, put the key in `CUSTOM_OPENAI_API_KEY`, and keep `CUSTOM_OPENAI_API_KEY_HEADER=api-key` if the gateway expects the header style shown in internal examples. The app sends the same chat-completions JSON payload directly to that URL.
+For the preferred Azure OpenAI SDK path, set `LLM_PROVIDER=azure_openai`, `AZURE_OPENAI_ENDPOINT=https://genaiapimna.jnj.com/openai-chat`, `AZURE_OPENAI_DEPLOYMENT=<MODEL_NAME>`, `AZURE_OPENAI_API_VERSION=2024-10-21`, and `AZURE_OPENAI_API_KEY=<KEY>`. Do not include the `/openai/deployments/.../chat/completions` suffix in `AZURE_OPENAI_ENDPOINT`; the SDK builds that route.
+
+For a raw direct HTTP fallback, set `LLM_PROVIDER=custom_openai`, put the full chat-completions URL in `CUSTOM_OPENAI_CHAT_URL`, put the key in `CUSTOM_OPENAI_API_KEY`, and keep `CUSTOM_OPENAI_API_KEY_HEADER=api-key` if the gateway expects that header.
 
 ## 19. Recommended Next Steps
 

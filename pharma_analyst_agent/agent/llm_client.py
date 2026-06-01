@@ -5,9 +5,14 @@ import json
 import urllib.error
 import urllib.request
 
-from openai import OpenAI
+from openai import AzureOpenAI, OpenAI
 
 from config import (
+    AZURE_OPENAI_API_KEY,
+    AZURE_OPENAI_API_VERSION,
+    AZURE_OPENAI_DEPLOYMENT,
+    AZURE_OPENAI_ENDPOINT,
+    AZURE_OPENAI_VISION_DEPLOYMENT,
     CUSTOM_OPENAI_API_KEY,
     CUSTOM_OPENAI_API_KEY_HEADER,
     CUSTOM_OPENAI_CHAT_URL,
@@ -49,8 +54,12 @@ def _custom_chat_completion(messages: list[dict[str, Any]], temperature: float, 
         headers=headers,
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=60) as response:
-        response_json = json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            response_json = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Custom OpenAI endpoint HTTP {exc.code}: {body}") from exc
     return response_json["choices"][0]["message"]["content"]
 
 
@@ -120,10 +129,24 @@ def _openrouter_chat_completion(messages: list[dict[str, Any]], temperature: flo
     return _message_content_from_response(response_json, "OpenRouter")
 
 
-def get_llm_client() -> tuple[OpenAI | None, str, str]:
+def get_llm_client() -> tuple[OpenAI | AzureOpenAI | None, str, str]:
     effective_provider = LLM_PROVIDER
     if LLM_PROVIDER == "openai" and not OPENAI_API_KEY and OPENROUTER_API_KEY:
         effective_provider = "openrouter"
+
+    if effective_provider == "azure_openai":
+        if not AZURE_OPENAI_API_KEY or not AZURE_OPENAI_ENDPOINT or not AZURE_OPENAI_DEPLOYMENT:
+            return None, "", "azure_openai"
+        return (
+            AzureOpenAI(
+                azure_endpoint=AZURE_OPENAI_ENDPOINT,
+                azure_deployment=AZURE_OPENAI_DEPLOYMENT,
+                api_key=AZURE_OPENAI_API_KEY,
+                api_version=AZURE_OPENAI_API_VERSION,
+            ),
+            AZURE_OPENAI_DEPLOYMENT,
+            "azure_openai",
+        )
 
     if effective_provider == "custom_openai":
         if not CUSTOM_OPENAI_CHAT_URL or not CUSTOM_OPENAI_API_KEY:
@@ -140,10 +163,25 @@ def get_llm_client() -> tuple[OpenAI | None, str, str]:
     return OpenAI(api_key=OPENAI_API_KEY), OPENAI_PLANNER_MODEL, "openai"
 
 
-def get_vision_client() -> tuple[OpenAI | None, str, str]:
+def get_vision_client() -> tuple[OpenAI | AzureOpenAI | None, str, str]:
     effective_provider = LLM_PROVIDER
     if LLM_PROVIDER == "openai" and not OPENAI_API_KEY and OPENROUTER_API_KEY:
         effective_provider = "openrouter"
+
+    if effective_provider == "azure_openai":
+        deployment = AZURE_OPENAI_VISION_DEPLOYMENT or AZURE_OPENAI_DEPLOYMENT
+        if not AZURE_OPENAI_API_KEY or not AZURE_OPENAI_ENDPOINT or not deployment:
+            return None, "", "azure_openai"
+        return (
+            AzureOpenAI(
+                azure_endpoint=AZURE_OPENAI_ENDPOINT,
+                azure_deployment=deployment,
+                api_key=AZURE_OPENAI_API_KEY,
+                api_version=AZURE_OPENAI_API_VERSION,
+            ),
+            deployment,
+            "azure_openai",
+        )
 
     if effective_provider == "custom_openai":
         if not CUSTOM_OPENAI_CHAT_URL or not CUSTOM_OPENAI_API_KEY:
