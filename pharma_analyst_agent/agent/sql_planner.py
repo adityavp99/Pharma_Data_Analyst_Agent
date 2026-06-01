@@ -6,7 +6,7 @@ import json
 import re
 
 from agent.context_builder import build_llm_context
-from agent.llm_client import get_llm_client
+from agent.llm_client import complete_chat
 from config import ENABLE_LLM_PLANNER
 from tools.schema_tool import get_schema
 from tools.metric_sql_builder import build_metric_plan_from_question
@@ -52,18 +52,13 @@ def _llm_plan(user_question: str, db_path: str | Path, mode: str = "pharma") -> 
     if not ENABLE_LLM_PLANNER:
         return None
 
-    client, model, provider = get_llm_client()
-    if client is None:
-        return None
-
     context = build_llm_context(user_question, db_path)
     domain_instruction = (
         "You are a SQL planning agent for synthetic pharma analytics."
         if mode == "pharma"
         else "You are a SQL planning agent for a user-uploaded CSV loaded into SQLite."
     )
-    response = client.chat.completions.create(
-        model=model,
+    content, provider = complete_chat(
         temperature=0,
         messages=[
             {
@@ -95,7 +90,8 @@ def _llm_plan(user_question: str, db_path: str | Path, mode: str = "pharma") -> 
             },
         ],
     )
-    content = response.choices[0].message.content or "{}"
+    if content is None:
+        return None
     parsed = _extract_json(content)
     sql = parsed.get("sql", "")
     validate_sql(sql)
@@ -233,8 +229,39 @@ def _fallback_uploaded_csv_plan(db_path: str | Path) -> dict[str, Any]:
     }
 
 
+def _uploaded_csv_profile_plan(db_path: str | Path) -> dict[str, Any] | None:
+    schema = get_schema(db_path)
+    first_table = next(iter(schema), None)
+    if not first_table:
+        return None
+    return {
+        "sql": f"SELECT * FROM {first_table} LIMIT 10",
+        "explanation": (
+            "The uploaded CSV was profiled by returning a row preview. "
+            "Use the result table columns and sample rows to decide what analytical questions to ask next."
+        ),
+        "assumptions": ["This is a preview/profile response, not an aggregate analysis."],
+        "python": None,
+        "planner_source": "uploaded_csv_profile",
+    }
+
+
 def plan_query(user_question: str, db_path: str | Path, force_llm_first: bool = False) -> dict[str, Any]:
     if force_llm_first:
+        if _mentions(
+            user_question,
+            "what kind of data",
+            "what data",
+            "describe",
+            "summary of columns",
+            "snippet",
+            "sample rows",
+            "preview",
+            "rows and columns",
+        ):
+            profile_plan = _uploaded_csv_profile_plan(db_path)
+            if profile_plan:
+                return profile_plan
         try:
             llm_plan = _llm_plan(user_question, db_path, mode="uploaded_csv")
         except Exception:

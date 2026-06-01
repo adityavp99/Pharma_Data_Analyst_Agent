@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from openai import OpenAI
-
-from config import AI_SUMMARY_PROVIDER, OPENROUTER_API_KEY, OPENROUTER_SUMMARY_MODEL
+from agent.llm_client import complete_chat
+from config import AI_SUMMARY_PROVIDER, LLM_PROVIDER, OPENROUTER_API_KEY
 
 
 def is_summary_enabled() -> bool:
+    if AI_SUMMARY_PROVIDER == "llm":
+        return True
     return AI_SUMMARY_PROVIDER == "openrouter" and bool(OPENROUTER_API_KEY)
 
 
@@ -19,12 +20,8 @@ def summarize_for_business_user(
     if not is_summary_enabled():
         return None
 
-    client = OpenAI(
-        api_key=OPENROUTER_API_KEY,
-        base_url="https://openrouter.ai/api/v1",
-    )
-    completion = client.chat.completions.create(
-        model=OPENROUTER_SUMMARY_MODEL,
+    content, _provider = complete_chat(
+        temperature=0,
         messages=[
             {
                 "role": "system",
@@ -43,6 +40,5 @@ def summarize_for_business_user(
                 ),
             },
         ],
-        temperature=0,
     )
-    return completion.choices[0].message.content
+    return content

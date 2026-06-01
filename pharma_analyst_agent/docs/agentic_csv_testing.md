@@ -46,6 +46,30 @@ OPENROUTER_VISION_MODEL=deepseek/deepseek-v4-flash:free
 OPENAI_API_KEY=
 ```
 
+### Option C: Enterprise/custom OpenAI-compatible endpoint
+
+Use this when your organization gives you a full chat-completions endpoint URL and expects an `api-key` header, for example:
+
+```text
+https://.../openai/deployments/gpt-4o/chat/completions?api-version=...
+```
+
+Set:
+
+```bash
+LLM_PROVIDER=custom_openai
+CUSTOM_OPENAI_CHAT_URL=https://your-org-endpoint/openai/deployments/gpt-4o/chat/completions?api-version=2023-03-15-preview
+CUSTOM_OPENAI_API_KEY=your_enterprise_key_here
+CUSTOM_OPENAI_API_KEY_HEADER=api-key
+CUSTOM_OPENAI_MAX_TOKENS=1500
+
+# Optional. Leave blank if the deployment is already in the URL.
+CUSTOM_OPENAI_PLANNER_MODEL=
+CUSTOM_OPENAI_VISION_MODEL=
+```
+
+Leave the public OpenAI/OpenRouter keys blank if you are using the enterprise endpoint.
+
 Important: not every OpenRouter free model supports image input. If screenshot chart replication fails, use OpenAI vision or an OpenRouter model that supports images.
 
 ## 3. Run The App
@@ -90,6 +114,9 @@ uploaded_csv_preview_fallback
 
 Use questions like:
 
+- What kind of data does this file contain? Show me a snippet of rows and columns.
+- Describe this CSV so I know what questions to ask.
+- Preview the rows and columns in this file.
 - Show total sales by product.
 - Show monthly revenue trend by region.
 - Which customer segment has the highest margin?
@@ -99,6 +126,8 @@ Use questions like:
 - Create a line chart of sales over time by region.
 
 The LLM sees the uploaded table schema and generates SQLite SQL.
+
+For preview/profile questions, the app intentionally returns a safe row preview first. That helps you inspect available columns before asking analytical questions.
 
 ## 6. Test With A Tableau Screenshot
 

@@ -5,3 +5,4 @@ __pycache__/
 .env
 data/raw/*.csv
 data/processed/*.db
+data/sample_uploads/*.csv

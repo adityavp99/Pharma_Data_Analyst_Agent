@@ -5,7 +5,7 @@ import base64
 import json
 import re
 
-from agent.llm_client import get_vision_client
+from agent.llm_client import complete_chat
 
 
 SUPPORTED_CHART_TYPES = {"bar", "line", "scatter"}
@@ -26,14 +26,10 @@ def infer_chart_plan_from_screenshot(
     available_columns: list[str],
     question: str = "",
 ) -> dict[str, Any] | None:
-    client, model, provider = get_vision_client()
-    if client is None:
-        return None
-
     encoded = base64.b64encode(image_bytes).decode("utf-8")
-    response = client.chat.completions.create(
-        model=model,
+    content, provider = complete_chat(
         temperature=0,
+        vision=True,
         messages=[
             {
                 "role": "system",
@@ -69,7 +65,8 @@ def infer_chart_plan_from_screenshot(
             },
         ],
     )
-    content = response.choices[0].message.content or "{}"
+    if content is None:
+        return None
     parsed = _extract_json(content)
     chart_type = parsed.get("chart_type")
     x_col = parsed.get("x_col")

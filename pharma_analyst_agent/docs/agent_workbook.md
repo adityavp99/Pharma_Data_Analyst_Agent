@@ -1135,7 +1135,9 @@ Current limitations:
 
 ### Q: Is the LLM generating all SQL?
 
-No. Known workflows use deterministic templates and metric SQL builders. The LLM is used only as a fallback planner when those do not cover the question and OpenRouter is configured.
+No for the synthetic pharma mode. Known workflows use deterministic templates and metric SQL builders. The LLM is used as a fallback planner when those do not cover the question and an LLM provider is configured.
+
+For uploaded CSV mode, yes, the workflow is more agentic: the app loads the CSV into SQLite, sends the live schema to the LLM, asks the LLM to generate SQL, validates that SQL, and then executes it read-only. Profile questions such as "what kind of data is this?" use a safe preview path so the user can inspect columns before asking deeper questions.
 
 ### Q: Why not let the LLM write everything?
 
@@ -1164,6 +1166,10 @@ Architecturally yes, but we need a datamart connector, read-only credentials, re
 ### Q: How will this fit into our platform?
 
 The Streamlit app should eventually be replaced by an API. Your platform frontend will call the agent API and render the returned answer, table, chart plan, SQL, semantic context, and citations.
+
+### Q: How do we connect to an enterprise OpenAI-compatible endpoint?
+
+Set `LLM_PROVIDER=custom_openai`, put the full chat-completions URL in `CUSTOM_OPENAI_CHAT_URL`, put the key in `CUSTOM_OPENAI_API_KEY`, and keep `CUSTOM_OPENAI_API_KEY_HEADER=api-key` if the gateway expects the header style shown in internal examples. The app sends the same chat-completions JSON payload directly to that URL.
 
 ## 19. Recommended Next Steps
 
