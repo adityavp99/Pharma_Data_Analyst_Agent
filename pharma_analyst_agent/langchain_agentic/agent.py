@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from config import AGENT_ENABLE_PYTHON_TOOL, AGENT_MAX_SQL_ROWS, AGENT_RECURSION_LIMIT
+from langchain_agentic.charting import summarize_chart_options, validate_chart_plan
 from langchain_agentic.llm_factory import LangChainAgentError, build_chat_model
 from tools.schema_tool import describe_table, get_schema_text, get_table_row_counts
 from tools.sql_tool import run_readonly_sql
@@ -30,7 +31,11 @@ Operating rules:
   reshaping, or dataframe exploration that is awkward in SQL.
 - If the user asks what the CSV contains, inspect the dataset and summarize columns, row count,
   sample values, likely meaning, and good follow-up question ideas.
-- If a visual would help, call propose_chart with columns that exist in the latest SQL result or uploaded dataframe.
+- If a visual would help, use inspect_chart_options first, then call propose_chart with columns that exist
+  in the latest SQL result or uploaded dataframe.
+- If propose_chart returns valid=false, repair the chart choice by aggregating/filtering data or choosing
+  more appropriate columns/chart type before answering.
+- Prefer charting aggregated result data over raw uploaded data when the raw data is too granular.
 - If the data is insufficient, say what is missing.
 - Keep answers business-friendly and concise, but include enough evidence to be trusted.
 - For generated charts, explain why that chart type and axis choice make sense.
@@ -119,6 +124,12 @@ def _message_to_text(message: Any) -> str:
     return str(content)
 
 
+def _frame_from_sql_result(result: dict[str, Any] | None) -> pd.DataFrame | None:
+    if not result or result.get("error"):
+        return None
+    return pd.DataFrame(result.get("rows", []), columns=result.get("columns", []))
+
+
 class AgenticCSVAnalyst:
     def __init__(self, db_path: str | Path, table_name: str):
         self.db_path = Path(db_path)
@@ -128,6 +139,7 @@ class AgenticCSVAnalyst:
             "sql_queries": [],
             "python_runs": [],
             "chart_plan": None,
+            "chart_validation": None,
             "last_sql_result": None,
             "last_python_result": None,
         }
@@ -217,6 +229,22 @@ class AgenticCSVAnalyst:
             return _safe_json(payload)
 
         @tool
+        def inspect_chart_options(data_source: str = "latest_sql_result") -> str:
+            """Inspect available columns and chart suitability for latest_sql_result or uploaded_dataframe."""
+            source_frame = None
+            if data_source == "latest_sql_result":
+                source_frame = _frame_from_sql_result(state.get("last_sql_result"))
+            if source_frame is None:
+                source_frame = frame
+                data_source = "uploaded_dataframe"
+            return _safe_json(
+                {
+                    "data_source": data_source,
+                    **summarize_chart_options(source_frame),
+                }
+            )
+
+        @tool
         def propose_chart(
             chart_type: str,
             x_col: str,
@@ -225,19 +253,30 @@ class AgenticCSVAnalyst:
             title: str | None = None,
             data_source: str = "latest_sql_result",
         ) -> str:
-            """Propose a chart using existing columns. chart_type should be bar, line, scatter, or area."""
+            """Validate and propose a chart. If valid=false, revise the chart before final answer."""
+            source_frame = None
+            if data_source == "latest_sql_result":
+                source_frame = _frame_from_sql_result(state.get("last_sql_result"))
+            if source_frame is None:
+                source_frame = frame
+                data_source = "uploaded_dataframe"
             plan = {
-                "chart_type": chart_type,
+                "chart_type": str(chart_type).lower(),
                 "x_col": x_col,
                 "y_col": y_col,
                 "group_by": group_by or None,
                 "title": title or "Agent-generated chart",
                 "data_source": data_source,
             }
-            state["chart_plan"] = plan
-            return _safe_json(plan)
+            validation = validate_chart_plan(source_frame, plan)
+            state["chart_validation"] = validation
+            if validation["valid"]:
+                state["chart_plan"] = plan
+            else:
+                state["chart_plan"] = None
+            return _safe_json(validation)
 
-        return [inspect_dataset, query_dataset_sql, run_python_analysis, propose_chart]
+        return [inspect_dataset, query_dataset_sql, run_python_analysis, inspect_chart_options, propose_chart]
 
     def run(self, question: str, chat_history: list[dict[str, str]] | None = None) -> dict[str, Any]:
         try:
@@ -267,6 +306,7 @@ class AgenticCSVAnalyst:
             "messages": response_messages,
             "tool_trace": self._format_trace(response_messages),
             "chart_plan": self.state.get("chart_plan"),
+            "chart_validation": self.state.get("chart_validation"),
             "last_sql_result": self.state.get("last_sql_result"),
             "last_python_result": self.state.get("last_python_result"),
             "sql_queries": self.state.get("sql_queries", []),

@@ -9,7 +9,7 @@ The workspace has been cleaned around the LangChain agentic CSV lab. The old syn
 - Upload a CSV.
 - Store it as a temporary local SQLite table.
 - Let a LangChain `create_agent` loop decide what to do.
-- Give the agent tools for dataset inspection, SQL querying, pandas analysis, and chart proposal.
+- Give the agent tools for dataset inspection, SQL querying, pandas analysis, chart option inspection, and chart proposal/validation.
 - Render the final answer, latest SQL result, Python result, chart, and agent tool trace.
 - Preserve chat history so users can ask follow-up questions.
 
@@ -78,9 +78,11 @@ pytest
    - `inspect_dataset`
    - `query_dataset_sql`
    - `run_python_analysis`
+   - `inspect_chart_options`
    - `propose_chart`
 6. Streamlit stores recent user/assistant turns in session state so follow-ups have context.
-7. Streamlit renders the result and tool trace.
+7. Streamlit validates the final chart spec again before rendering it with Plotly.
+8. Streamlit renders the result and tool trace.
 
 For a detailed explanation of this pivot, see [`docs/langchain_agentic_pivot.md`](docs/langchain_agentic_pivot.md).
 
@@ -90,6 +92,8 @@ For a detailed explanation of this pivot, see [`docs/langchain_agentic_pivot.md`
 - The UI is simple: upload CSV, then chat.
 - Tool traces make the agent behavior inspectable.
 - SQL is still read-only.
+- Chart proposals are now validated before rendering.
+- Plotly charts are more interactive than the previous basic Altair charts.
 - The project is small enough to move quickly.
 - Azure OpenAI, OpenAI, and OpenRouter provider paths are separated cleanly.
 - The code is now easier to map to future datamart tools because the tools are generic.
@@ -100,7 +104,7 @@ For a detailed explanation of this pivot, see [`docs/langchain_agentic_pivot.md`
 - **Data permissions:** uploaded CSV testing does not yet model user-level datamart permissions.
 - **Large data:** the current CSV-to-SQLite path is not designed for very large enterprise datamarts.
 - **Context management:** the agent only sees recent chat turns and tool outputs. For many tables, we will need schema retrieval, table selection, and possibly a metadata/vector layer.
-- **Chart sophistication:** charts are useful but basic. Dashboard-level layout, KPI cards, formatting, and Tableau-like replication still need dedicated tools.
+- **Chart sophistication:** chart specs are validated now, but dashboard-level layout, KPI cards, advanced formatting, and Tableau-like replication still need dedicated tools.
 - **Reliability evaluation:** we need a test set of realistic business questions with expected SQL/outputs.
 - **Human approval:** there is no approval checkpoint before expensive queries or report publishing.
 - **Observability:** we show a local trace, but production needs logs, cost tracking, latency, and failure categorization.
@@ -160,6 +164,16 @@ Find unusual spikes or outliers in revenue. Use Python if needed and explain you
 Check for missing values, duplicate IDs, strange date ranges, and columns that may need cleaning.
 ```
 
+### Chart Quality
+
+```text
+Create the best chart for comparing total revenue by product. If the first chart choice is not suitable, fix it before answering.
+```
+
+```text
+Create a trend chart, but first aggregate the data to the right grain so the chart is not too crowded.
+```
+
 ### Follow-Up Chat
 
 After one answer, ask:
@@ -192,7 +206,7 @@ What business action would you recommend investigating next, without claiming ca
 
 1. Test with real datamart-shaped CSV extracts and collect failure cases.
 2. Add a safer Python execution service or disable Python for demos where risk is unacceptable.
-3. Add better chart-spec output, including KPI cards and multi-chart report sections.
+3. Add better chart-spec output, including KPI cards, multi-chart report sections, and dashboard layout.
 4. Add datamart connector tools that expose only approved schemas/views.
 5. Add metadata retrieval so the agent can handle many tables without stuffing all context into the prompt.
 6. Add a query approval step for large/expensive datamart queries.

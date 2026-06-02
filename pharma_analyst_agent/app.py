@@ -5,7 +5,6 @@ from typing import Any
 import sqlite3
 import sys
 
-import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -15,6 +14,7 @@ if str(ROOT) not in sys.path:
 
 from config import LLM_PROVIDER, PROCESSED_DATA_DIR
 from langchain_agentic import AgenticCSVAnalyst, LangChainAgentError
+from langchain_agentic.charting import build_plotly_chart, validate_chart_plan
 from tools.csv_tool import load_csv_to_sqlite, safe_table_name
 from tools.schema_tool import get_table_row_counts
 
@@ -45,6 +45,9 @@ def render_agent_chart(result: dict[str, Any], db_path: Path, table_name: str) -
     chart_plan = result.get("chart_plan")
     if not chart_plan:
         st.info("The agent did not propose a chart for this answer.")
+        if result.get("chart_validation"):
+            st.write("Latest chart validation feedback:")
+            st.json(result["chart_validation"])
         return
 
     frame = _chart_source_frame(result, db_path, table_name)
@@ -52,48 +55,19 @@ def render_agent_chart(result: dict[str, Any], db_path: Path, table_name: str) -
         st.info("There is no data available to render the proposed chart.")
         return
 
-    x_col = chart_plan.get("x_col")
-    y_col = chart_plan.get("y_col")
-    group_by = chart_plan.get("group_by")
-    chart_type = str(chart_plan.get("chart_type", "bar")).lower()
-
-    if x_col not in frame.columns or y_col not in frame.columns:
-        st.warning("The agent proposed chart columns that are not present in the available result data.")
-        st.json(chart_plan)
+    validation = validate_chart_plan(frame, chart_plan)
+    if not validation["valid"]:
+        st.warning("The proposed chart failed validation and was not rendered.")
+        st.json(validation)
         return
+    if validation["warnings"]:
+        st.warning("Chart validation warnings: " + " ".join(validation["warnings"]))
 
-    frame = frame.copy()
-    frame[y_col] = pd.to_numeric(frame[y_col], errors="coerce")
-    parsed_x = pd.to_datetime(frame[x_col], errors="coerce")
-    if parsed_x.notna().mean() > 0.8:
-        frame[x_col] = parsed_x
-        x_type = "T"
-    elif pd.api.types.is_numeric_dtype(frame[x_col]):
-        x_type = "Q"
-    else:
-        x_type = "N"
-
-    tooltip = [col for col in [x_col, y_col, group_by] if col and col in frame.columns]
-    base = alt.Chart(frame).encode(
-        x=alt.X(f"{x_col}:{x_type}", title=str(x_col).replace("_", " ").title()),
-        y=alt.Y(f"{y_col}:Q", title=str(y_col).replace("_", " ").title()),
-        tooltip=tooltip,
-    )
-    if group_by and group_by in frame.columns:
-        base = base.encode(color=alt.Color(f"{group_by}:N", title=str(group_by).replace("_", " ").title()))
-
-    if chart_type == "line":
-        chart = base.mark_line(point=True)
-    elif chart_type == "scatter":
-        chart = base.mark_circle(size=80)
-    elif chart_type == "area":
-        chart = base.mark_area(opacity=0.7)
-    else:
-        chart = base.mark_bar()
-
-    st.altair_chart(chart.properties(title=chart_plan.get("title") or "Agent chart"), use_container_width=True)
+    st.plotly_chart(build_plotly_chart(frame, chart_plan), use_container_width=True)
     with st.expander("Chart spec chosen by the agent", expanded=False):
         st.json(chart_plan)
+        st.write("Validation")
+        st.json(validation)
 
 
 def render_trace(trace: list[dict[str, Any]]) -> None:

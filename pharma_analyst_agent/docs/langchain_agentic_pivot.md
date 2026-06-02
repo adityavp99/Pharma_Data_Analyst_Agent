@@ -35,7 +35,7 @@ The new version gives the LLM tools and lets it operate in a loop:
 - It can generate SQL after seeing the schema.
 - It can revise its next step after seeing SQL results.
 - It can run pandas analysis if SQL alone is not enough.
-- It can propose a chart when a visual would help.
+- It can inspect chart options, propose a chart, and receive validation feedback when a chart is unsuitable.
 - It can answer open-ended questions like "what is this file about?"
 
 The backend no longer decides "this is SQL only" or "this needs Python." The agent decides.
@@ -89,6 +89,7 @@ Creates the LangChain agent and exposes tools:
 - `inspect_dataset`
 - `query_dataset_sql`
 - `run_python_analysis`
+- `inspect_chart_options`
 - `propose_chart`
 
 The tools are general data-analysis capabilities. They are not pharma-specific.
@@ -141,7 +142,7 @@ This is a local prototype tool. Before platform deployment, replace this with a 
 
 ### propose_chart
 
-The LLM calls this when it wants the UI to render a chart.
+The LLM calls this when it wants the UI to render a chart. The chart proposal is validated before it is accepted.
 
 The agent chooses:
 
@@ -152,7 +153,20 @@ The agent chooses:
 - chart title
 - whether the chart should use the latest SQL result or uploaded dataframe
 
-Streamlit only renders the chart spec. It does not decide which chart should be created.
+If validation fails, the tool returns issues and does not store the chart for rendering. The agent should revise the chart by changing chart type, choosing better columns, or aggregating/filtering the data first.
+
+Streamlit validates the chart spec again before rendering and uses Plotly for the final chart.
+
+### inspect_chart_options
+
+The LLM calls this before proposing a chart. It returns:
+
+- available chart columns
+- likely column roles, such as numeric, datetime, or categorical
+- row count
+- basic charting guidance
+
+This helps the agent avoid unusable chart choices, such as line charts over unordered categories or bar charts with too many categories.
 
 ## How To Run
 

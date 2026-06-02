@@ -59,5 +59,32 @@ def test_langchain_agentic_tools_work_without_llm_call(tmp_path: Path) -> None:
             }
         )
     )
-    assert chart_plan["x_col"] == "product"
+    assert chart_plan["valid"] is True
+    assert chart_plan["plan"]["x_col"] == "product"
     assert analyst.state["chart_plan"]["title"] == "Sales by product"
+
+    options = json.loads(tools["inspect_chart_options"].invoke({"data_source": "latest_sql_result"}))
+    assert options["data_source"] == "latest_sql_result"
+    assert any(column["name"] == "sales" and column["role"] == "numeric" for column in options["columns"])
+
+
+def test_invalid_chart_plan_is_rejected(tmp_path: Path) -> None:
+    analyst = AgenticCSVAnalyst(_make_db(tmp_path), "uploaded_data")
+    tools = {tool.name: tool for tool in analyst._build_tools()}
+
+    rejected = json.loads(
+        tools["propose_chart"].invoke(
+            {
+                "chart_type": "line",
+                "x_col": "product",
+                "y_col": "sales",
+                "group_by": None,
+                "title": "Bad line chart",
+                "data_source": "uploaded_dataframe",
+            }
+        )
+    )
+
+    assert rejected["valid"] is False
+    assert analyst.state["chart_plan"] is None
+    assert any("time-like or ordered numeric x-axis" in issue for issue in rejected["issues"])
