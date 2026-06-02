@@ -1,19 +1,18 @@
-# Pharma Analyst Agent MVP
+# LangChain Agentic Data Analyst MVP
 
-Local proof-of-concept for a generalized data analyst agent over synthetic pharmaceutical-style structured data.
+Local proof-of-concept for a generalized data analyst agent that can reason over an uploaded CSV, decide which tools to use, run multi-step analysis, and produce answer/table/chart outputs.
 
-The MVP shows how an agent can route a natural-language analytics question to a semantic layer, read-only SQL, and controlled Python analysis without using real patient-identifiable data.
+The active Streamlit app is now a LangChain agentic CSV lab. The older synthetic pharma dataset, semantic layer, deterministic router, and metric templates are still in the repo as reference/history, but `app.py` now uses the new LangChain loop under `langchain_agentic/`.
 
-## What It Includes
+## What The Active App Does
 
-- Synthetic CSV generator for trials, sites, patients, adverse events, lab results, and drug sales.
-- SQLite loader with indexes for common joins and filters.
-- Semantic layer for metrics, ontology, and business glossary.
-- Read-only SQL tool with mutation/admin command blocking.
-- Controlled Python analysis tool using predefined pandas/numpy functions only.
-- Deterministic tool router, metric SQL builders, and optional LLM SQL planner.
-- Streamlit UI for local demos.
-- Pytest coverage for SQL safety, semantic loading, and sample questions.
+- Upload a CSV.
+- Store it as a temporary local SQLite table.
+- Let a LangChain `create_agent` loop decide what to do.
+- Give the agent tools for dataset inspection, SQL querying, pandas analysis, and chart proposal.
+- Render the final answer, latest SQL result, Python result, chart, and agent tool trace.
+
+The backend no longer decides "SQL only" or "Python needed" through a deterministic router. The LLM decides which tool to call next based on observations from previous tool calls.
 
 ## Quick Start Guide
 
@@ -36,88 +35,89 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-The app works without an OpenAI/OpenRouter API key because this MVP includes unit-tested metric SQL builders and safe fallback plans. If `OPENROUTER_API_KEY` is configured, the planner can use an OpenAI-compatible LLM to generate SQL for questions that are not covered by metric builders.
-
-### Step 2: Generate and Load Synthetic Data
+Configure your company Azure OpenAI endpoint in `.env`:
 
 ```bash
-# Generate synthetic pharmaceutical data
-python scripts/generate_synthetic_data.py
-
-# Load the data into SQLite
-python scripts/load_sqlite.py
+LLM_PROVIDER=azure_openai
+AZURE_OPENAI_API_KEY=your_company_key_here
+AZURE_OPENAI_ENDPOINT=https://genaiapimna.jnj.com/openai-chat
+AZURE_OPENAI_DEPLOYMENT=gpt-4o-mini
+AZURE_OPENAI_API_VERSION=2024-10-21
+AGENT_RECURSION_LIMIT=12
+AGENT_MAX_SQL_ROWS=1000
+AGENT_ENABLE_PYTHON_TOOL=true
 ```
 
-This creates:
-
-- `data/raw/trials.csv` — Clinical trial master data
-- `data/raw/sites.csv` — Trial site enrollment and target data
-- `data/raw/patients.csv` — Patient demographics and enrollment
-- `data/raw/adverse_events.csv` — Reported adverse events by patient/trial
-- `data/raw/lab_results.csv` — Patient lab test results with normal ranges
-- `data/raw/drug_sales.csv` — Monthly drug sales data
-- `data/processed/pharma_mvp.db` — SQLite database with indexes
-
-### Step 3: Launch the Application
+### Step 2: Launch The Application
 
 ```bash
 # Start the Streamlit web application
 streamlit run app.py
 ```
 
-The application will open in your browser at `http://localhost:8501`. You can now start querying the synthetic pharmaceutical data.
+Upload a CSV and ask:
 
-### Step 4: Run Tests (Optional)
-
-```bash
-# Execute all test suites
-pytest
-
-# Run with verbose output
-pytest -v
-
-# Test specific modules
-pytest tests/test_sql_safety.py          # Test SQL injection prevention
-pytest tests/test_semantic_layer.py      # Test semantic layer loading
-pytest tests/test_sample_questions.py    # Test end-to-end question routing
+```text
+What kind of data does this file contain? Show me sample rows, columns, and useful questions I can ask.
 ```
 
-## Architecture
+### Step 3: Run Tests
 
-The flow is:
+```bash
+pytest
+```
 
-1. User asks a natural-language question.
-2. `agent/tool_router.py` decides whether the question needs semantic context, SQL, Python, or refusal.
-3. `tools/semantic_tool.py` retrieves relevant metric, ontology, or glossary context.
-4. `agent/sql_planner.py` plans the query. It first uses controlled Python templates for trend/correlation/outlier requests, then unit-tested metric SQL builders, then optional OpenRouter LLM SQL generation, then a safe fallback summary.
-5. `tools/sql_tool.py` validates SQL, rejects unsafe statements, opens SQLite in read-only mode, and returns rows.
-6. `tools/python_tool.py` runs only predefined analysis functions when extra post-query computation is needed.
-7. `agent/response_formatter.py` formats the final answer with evidence, SQL, assumptions, and limitations.
+## Active Architecture
 
-For a detailed workbook that explains the full flow, LLM usage, SQL planning, charting, testing, and datamart/Tableau migration path, see [`docs/agent_workbook.md`](docs/agent_workbook.md).
+1. `app.py` receives CSV upload and question.
+2. `tools/csv_tool.py` loads the CSV into SQLite.
+3. `langchain_agentic/llm_factory.py` builds the LLM client.
+4. `langchain_agentic/agent.py` creates a LangChain agent with tools.
+5. The agent decides whether to call:
+   - `inspect_dataset`
+   - `query_dataset_sql`
+   - `run_python_analysis`
+   - `propose_chart`
+6. Streamlit renders the result and tool trace.
 
-For quick agentic testing with your own CSV file and optional Tableau/chart screenshot, see [`docs/agentic_csv_testing.md`](docs/agentic_csv_testing.md).
+For a detailed explanation of this pivot, see [`docs/langchain_agentic_pivot.md`](docs/langchain_agentic_pivot.md).
+
+## Legacy Reference Components
+
+The repo still includes the earlier pharma-focused MVP components:
+
+- Synthetic CSV generator for trials, sites, patients, adverse events, lab results, and drug sales.
+- SQLite loader with indexes.
+- Semantic YAML files.
+- Deterministic router.
+- Metric SQL builders.
+- Controlled predefined Python analysis tools.
+
+These are useful references, but they are not the active Streamlit app flow after the LangChain pivot.
+
+To generate the old synthetic data:
+
+```bash
+python scripts/generate_synthetic_data.py
+python scripts/load_sqlite.py
+```
 
 ## Safety Notes
 
-- All data is synthetic.
-- Patient IDs are synthetic IDs.
-- SQL execution allows only one `SELECT` or `WITH` statement.
-- User-facing SQL rejects mutation, DDL, admin, attach/detach, vacuum, and pragma commands.
-- Python analysis does not run arbitrary model-generated code.
-- Adverse event analysis is descriptive only and does not infer causality.
-- The final answer must show evidence and limitations.
+- CSV upload mode is for local testing.
+- SQL execution is still read-only.
+- The local pandas code tool is for prototype testing only.
+- Before platform deployment, replace local Python execution with a sandboxed execution service.
+- Do not use real patient-identifiable data in this local prototype.
 
 ## Suggested Next Steps
 
-- Expand the LLM planner evaluation set and add more golden expected outputs.
-- Add a query approval/debug screen before executing LLM-generated SQL.
-- Expand the semantic layer and add unit-tested metric SQL builders.
-- Add chart rendering for trend and distribution outputs.
-- Add a vector database only after keyword semantic search becomes limiting.
-- Add LangChain, LlamaIndex, or OpenAI Agents SDK once the plain orchestration contract is stable.
+- Test the LangChain loop with real datamart-shaped CSV extracts.
+- Add datamart connector tools.
+- Add approved SQL/view-access tools.
+- Add chart/dashboard spec tools.
+- Add screenshot-to-chart-spec tooling for Tableau replication.
+- Add stronger execution sandboxing before production or platform exposure.
+- Move to explicit LangGraph only when the workflow needs durable state, approvals, retries, or multiple specialist agents.
 
-
-- Have a sematic layer ready, with sql templates if not should use LLMs to generate on the fly. 
-- Should figure out how to deal with context especially as it could greatly increase in volume. 
-- Use internal guardrails libraries for LLM guardralis and other existing libraries. 
+For the longer previous workbook, see [`docs/agent_workbook.md`](docs/agent_workbook.md).
