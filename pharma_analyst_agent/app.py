@@ -109,76 +109,11 @@ def render_trace(trace: list[dict[str, Any]]) -> None:
             st.code(item.get("content_preview", ""), language="json")
 
 
-st.set_page_config(page_title="LangChain Agentic CSV Analyst", layout="wide")
-st.title("LangChain Agentic CSV Analyst")
-st.caption(
-    "Upload a CSV and ask a question. The LangChain agent decides whether to inspect data, run SQL, "
-    "run pandas analysis, and propose a chart."
-)
-
-with st.sidebar:
-    st.subheader("Runtime")
-    st.write(f"LLM provider: `{LLM_PROVIDER}`")
-    st.write("Architecture: `LangChain create_agent`")
-    st.write("Mode: CSV-backed local SQLite")
-
-uploaded_csv = st.file_uploader("Upload CSV", type=["csv"])
-if uploaded_csv is None:
-    st.info("Upload a CSV file to start the agentic workflow.")
-    st.stop()
-
-table_name = safe_table_name(uploaded_csv.name)
-uploaded_db_path = PROCESSED_DATA_DIR / "agentic_uploaded_runtime.db"
-uploaded_csv.seek(0)
-uploaded_info = load_csv_to_sqlite(uploaded_csv, uploaded_db_path, table_name=table_name)
-
-st.success(
-    f"Loaded `{uploaded_csv.name}` as table `{table_name}` with "
-    f"{uploaded_info['rows']:,} rows and {len(uploaded_info['columns'])} columns."
-)
-
-with st.expander("Uploaded data preview", expanded=True):
-    st.dataframe(pd.DataFrame(uploaded_info["sample_rows"]), hide_index=True, use_container_width=True)
-    st.write("Columns")
-    st.write(uploaded_info["columns"])
-
-with st.sidebar:
-    st.subheader("Tables")
-    counts = get_table_row_counts(uploaded_db_path)
-    st.dataframe(pd.DataFrame([{"table": key, "rows": value} for key, value in counts.items()]), hide_index=True)
-
-question = st.text_area(
-    "Ask the agent a question about this CSV",
-    placeholder=(
-        "Examples:\n"
-        "- What kind of data does this file contain?\n"
-        "- Show me a useful summary and recommend questions I can ask.\n"
-        "- Which product has the highest revenue and why?\n"
-        "- Build a trend chart by month and explain the movement."
-    ),
-    height=150,
-)
-
-if st.button("Run agent", type="primary", disabled=not question.strip()):
-    with st.spinner("The agent is reasoning and calling tools..."):
-        try:
-            analyst = AgenticCSVAnalyst(uploaded_db_path, table_name)
-            result = analyst.run(question)
-        except LangChainAgentError as exc:
-            st.error(str(exc))
-            st.stop()
-        except Exception as exc:
-            st.error("The LangChain agentic task failed.")
-            st.exception(exc)
-            st.stop()
-
-    st.subheader("Answer")
-    st.markdown(result["answer"])
-
+def render_result_details(result: dict[str, Any], db_path: Path, table_name: str) -> None:
     tabs = st.tabs(["Chart", "Latest SQL Result", "Python Result", "Agent Trace", "Generated SQL"])
 
     with tabs[0]:
-        render_agent_chart(result, uploaded_db_path, table_name)
+        render_agent_chart(result, db_path, table_name)
 
     with tabs[1]:
         latest_sql = result.get("last_sql_result")
@@ -206,3 +141,111 @@ if st.button("Run agent", type="primary", disabled=not question.strip()):
                 st.code(query, language="sql")
         else:
             st.info("No SQL was generated.")
+
+
+st.set_page_config(page_title="LangChain Agentic CSV Analyst", layout="wide")
+st.title("LangChain Agentic CSV Analyst")
+st.caption(
+    "Upload a CSV and chat with a LangChain data analyst agent. The agent decides whether to inspect data, "
+    "run SQL, run pandas analysis, and propose charts."
+)
+
+with st.sidebar:
+    st.subheader("Runtime")
+    st.write(f"LLM provider: `{LLM_PROVIDER}`")
+    st.write("Architecture: `LangChain create_agent`")
+    st.write("Mode: CSV-backed local SQLite")
+
+uploaded_csv = st.file_uploader("Upload CSV", type=["csv"])
+if uploaded_csv is None:
+    st.info("Upload a CSV file to start the agentic workflow.")
+    st.stop()
+
+table_name = safe_table_name(uploaded_csv.name)
+uploaded_db_path = PROCESSED_DATA_DIR / "agentic_uploaded_runtime.db"
+uploaded_csv.seek(0)
+uploaded_info = load_csv_to_sqlite(uploaded_csv, uploaded_db_path, table_name=table_name)
+file_signature = f"{uploaded_csv.name}:{uploaded_info['rows']}:{','.join(uploaded_info['columns'])}"
+
+if st.session_state.get("active_file_signature") != file_signature:
+    st.session_state.active_file_signature = file_signature
+    st.session_state.chat_messages = []
+elif "chat_messages" not in st.session_state:
+    st.session_state.chat_messages = []
+
+st.success(
+    f"Loaded `{uploaded_csv.name}` as table `{table_name}` with "
+    f"{uploaded_info['rows']:,} rows and {len(uploaded_info['columns'])} columns."
+)
+
+with st.expander("Uploaded data preview", expanded=not st.session_state.get("chat_messages")):
+    st.dataframe(pd.DataFrame(uploaded_info["sample_rows"]), hide_index=True, use_container_width=True)
+    st.write("Columns")
+    st.write(uploaded_info["columns"])
+
+with st.sidebar:
+    st.subheader("Tables")
+    counts = get_table_row_counts(uploaded_db_path)
+    st.dataframe(pd.DataFrame([{"table": key, "rows": value} for key, value in counts.items()]), hide_index=True)
+    if st.button("Clear chat"):
+        st.session_state.chat_messages = []
+        st.rerun()
+
+if not st.session_state.chat_messages:
+    with st.chat_message("assistant"):
+        st.markdown(
+            "I loaded your CSV. Ask me what the file contains, what metrics matter, "
+            "or request a specific analysis/chart."
+        )
+
+for message in st.session_state.chat_messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+        if message["role"] == "assistant" and message.get("result"):
+            with st.expander("Analysis details", expanded=False):
+                render_result_details(message["result"], uploaded_db_path, table_name)
+
+prompt = st.chat_input(
+    "Ask a follow-up or a new analytical question about the uploaded CSV..."
+)
+
+if prompt:
+    history_for_agent = [
+        {"role": message["role"], "content": message["content"]}
+        for message in st.session_state.chat_messages
+        if message["role"] in {"user", "assistant"}
+    ]
+    st.session_state.chat_messages.append({"role": "user", "content": prompt})
+
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    with st.chat_message("assistant"):
+        with st.spinner("The agent is reasoning and calling tools..."):
+            try:
+                analyst = AgenticCSVAnalyst(uploaded_db_path, table_name)
+                result = analyst.run(prompt, chat_history=history_for_agent)
+            except LangChainAgentError as exc:
+                st.error(str(exc))
+                st.session_state.chat_messages.append({"role": "assistant", "content": str(exc)})
+                st.stop()
+            except Exception as exc:
+                st.error("The LangChain agentic task failed.")
+                st.exception(exc)
+                st.session_state.chat_messages.append(
+                    {"role": "assistant", "content": "The LangChain agentic task failed."}
+                )
+                st.stop()
+
+        st.markdown(result["answer"])
+        with st.expander("Analysis details", expanded=True):
+            render_result_details(result, uploaded_db_path, table_name)
+
+    st.session_state.chat_messages.append(
+        {
+            "role": "assistant",
+            "content": result["answer"],
+            "result": result,
+        }
+    )
+    st.rerun()

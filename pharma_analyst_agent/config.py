@@ -14,37 +14,21 @@ def resolve_project_path(path_value: str) -> Path:
     return PROJECT_ROOT / path
 
 
-DB_PATH = resolve_project_path(os.getenv("PHARMA_DB_PATH", "data/processed/pharma_mvp.db"))
-MAX_SQL_ROWS = int(os.getenv("MAX_SQL_ROWS", "200"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").strip().lower()
 OPENAI_PLANNER_MODEL = os.getenv("OPENAI_PLANNER_MODEL", OPENAI_MODEL)
-OPENAI_VISION_MODEL = os.getenv("OPENAI_VISION_MODEL", OPENAI_MODEL)
 AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", os.getenv("OPENAI_KEY", ""))
 AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "")
 AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "")
 AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21")
-AZURE_OPENAI_VISION_DEPLOYMENT = os.getenv("AZURE_OPENAI_VISION_DEPLOYMENT", AZURE_OPENAI_DEPLOYMENT)
-AI_SUMMARY_PROVIDER = os.getenv("AI_SUMMARY_PROVIDER", "").strip().lower()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-OPENROUTER_SUMMARY_MODEL = os.getenv("OPENROUTER_SUMMARY_MODEL", "deepseek/deepseek-v4-flash:free")
-ENABLE_LLM_PLANNER = os.getenv("ENABLE_LLM_PLANNER", "true").strip().lower() in {"1", "true", "yes"}
 OPENROUTER_PLANNER_MODEL = os.getenv("OPENROUTER_PLANNER_MODEL", "deepseek/deepseek-v4-flash:free")
-OPENROUTER_VISION_MODEL = os.getenv("OPENROUTER_VISION_MODEL", OPENROUTER_PLANNER_MODEL)
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1/chat/completions")
 OPENROUTER_HTTP_REFERER = os.getenv("OPENROUTER_HTTP_REFERER", "")
 OPENROUTER_APP_TITLE = os.getenv("OPENROUTER_APP_TITLE", "Pharma Data Analyst Agent")
-CUSTOM_OPENAI_CHAT_URL = os.getenv("CUSTOM_OPENAI_CHAT_URL", "")
-CUSTOM_OPENAI_API_KEY = os.getenv("CUSTOM_OPENAI_API_KEY", "")
-CUSTOM_OPENAI_API_KEY_HEADER = os.getenv("CUSTOM_OPENAI_API_KEY_HEADER", "api-key")
-CUSTOM_OPENAI_PLANNER_MODEL = os.getenv("CUSTOM_OPENAI_PLANNER_MODEL", "")
-CUSTOM_OPENAI_VISION_MODEL = os.getenv("CUSTOM_OPENAI_VISION_MODEL", CUSTOM_OPENAI_PLANNER_MODEL)
-CUSTOM_OPENAI_MAX_TOKENS = int(os.getenv("CUSTOM_OPENAI_MAX_TOKENS", "1500"))
 AGENT_RECURSION_LIMIT = int(os.getenv("AGENT_RECURSION_LIMIT", "12"))
 AGENT_MAX_SQL_ROWS = int(os.getenv("AGENT_MAX_SQL_ROWS", "1000"))
 AGENT_ENABLE_PYTHON_TOOL = os.getenv("AGENT_ENABLE_PYTHON_TOOL", "true").strip().lower() in {"1", "true", "yes"}
 
-RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
 PROCESSED_DATA_DIR = PROJECT_ROOT / "data" / "processed"
-SEMANTIC_LAYER_DIR = PROJECT_ROOT / "semantic_layer"

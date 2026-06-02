@@ -1,8 +1,8 @@
 # LangChain Agentic Data Analyst MVP
 
-Local proof-of-concept for a generalized data analyst agent that can reason over an uploaded CSV, decide which tools to use, run multi-step analysis, and produce answer/table/chart outputs.
+Local proof-of-concept for a generalized data analyst agent that can reason over an uploaded CSV, decide which tools to use, run multi-step analysis, answer follow-up questions, and produce answer/table/chart outputs.
 
-The active Streamlit app is now a LangChain agentic CSV lab. The older synthetic pharma dataset, semantic layer, deterministic router, and metric templates are still in the repo as reference/history, but `app.py` now uses the new LangChain loop under `langchain_agentic/`.
+The workspace has been cleaned around the LangChain agentic CSV lab. The old synthetic pharma dataset generator, semantic layer, deterministic router, one-shot planner, and metric templates have been removed to avoid confusion.
 
 ## What The Active App Does
 
@@ -11,6 +11,7 @@ The active Streamlit app is now a LangChain agentic CSV lab. The older synthetic
 - Let a LangChain `create_agent` loop decide what to do.
 - Give the agent tools for dataset inspection, SQL querying, pandas analysis, and chart proposal.
 - Render the final answer, latest SQL result, Python result, chart, and agent tool trace.
+- Preserve chat history so users can ask follow-up questions.
 
 The backend no longer decides "SQL only" or "Python needed" through a deterministic router. The LLM decides which tool to call next based on observations from previous tool calls.
 
@@ -67,9 +68,9 @@ What kind of data does this file contain? Show me sample rows, columns, and usef
 pytest
 ```
 
-## Active Architecture
+## Current Architecture
 
-1. `app.py` receives CSV upload and question.
+1. `app.py` receives CSV upload and chat messages.
 2. `tools/csv_tool.py` loads the CSV into SQLite.
 3. `langchain_agentic/llm_factory.py` builds the LLM client.
 4. `langchain_agentic/agent.py` creates a LangChain agent with tools.
@@ -78,28 +79,105 @@ pytest
    - `query_dataset_sql`
    - `run_python_analysis`
    - `propose_chart`
-6. Streamlit renders the result and tool trace.
+6. Streamlit stores recent user/assistant turns in session state so follow-ups have context.
+7. Streamlit renders the result and tool trace.
 
 For a detailed explanation of this pivot, see [`docs/langchain_agentic_pivot.md`](docs/langchain_agentic_pivot.md).
 
-## Legacy Reference Components
+## What Is Good Right Now
 
-The repo still includes the earlier pharma-focused MVP components:
+- The active flow is genuinely agentic: the LLM chooses tool calls in a loop.
+- The UI is simple: upload CSV, then chat.
+- Tool traces make the agent behavior inspectable.
+- SQL is still read-only.
+- The project is small enough to move quickly.
+- Azure OpenAI, OpenAI, and OpenRouter provider paths are separated cleanly.
+- The code is now easier to map to future datamart tools because the tools are generic.
 
-- Synthetic CSV generator for trials, sites, patients, adverse events, lab results, and drug sales.
-- SQLite loader with indexes.
-- Semantic YAML files.
-- Deterministic router.
-- Metric SQL builders.
-- Controlled predefined Python analysis tools.
+## Major Gaps To Explore And Fix
 
-These are useful references, but they are not the active Streamlit app flow after the LangChain pivot.
+- **Python sandboxing:** the pandas tool currently runs local model-generated code with restricted builtins. This is fine for local testing, but not enough for production.
+- **Data permissions:** uploaded CSV testing does not yet model user-level datamart permissions.
+- **Large data:** the current CSV-to-SQLite path is not designed for very large enterprise datamarts.
+- **Context management:** the agent only sees recent chat turns and tool outputs. For many tables, we will need schema retrieval, table selection, and possibly a metadata/vector layer.
+- **Chart sophistication:** charts are useful but basic. Dashboard-level layout, KPI cards, formatting, and Tableau-like replication still need dedicated tools.
+- **Reliability evaluation:** we need a test set of realistic business questions with expected SQL/outputs.
+- **Human approval:** there is no approval checkpoint before expensive queries or report publishing.
+- **Observability:** we show a local trace, but production needs logs, cost tracking, latency, and failure categorization.
+- **Guardrails:** read-only SQL is enforced locally, but enterprise guardrails should come from approved libraries/services.
 
-To generate the old synthetic data:
+## What Else To Test
 
-```bash
-python scripts/generate_synthetic_data.py
-python scripts/load_sqlite.py
+Start with one CSV that resembles one of your real datamarts. Then test these categories:
+
+### Dataset Understanding
+
+```text
+What kind of data does this file contain? Explain the columns, likely grain, sample rows, and what questions I can ask.
+```
+
+```text
+What are the likely dimensions, measures, date columns, and ID columns in this dataset?
+```
+
+### KPI-Style Questions
+
+```text
+What are the top 5 products by total revenue? Show the calculation and create a bar chart.
+```
+
+```text
+Calculate total revenue, total units, average revenue per unit, and number of unique customers.
+```
+
+### Trend Analysis
+
+```text
+Show monthly revenue trend by region. Create a line chart and explain the biggest changes.
+```
+
+```text
+Compare this quarter versus last quarter for revenue and units. Show percentage change.
+```
+
+### Segmentation
+
+```text
+Which customer segment contributes the most revenue, and how does that differ by region?
+```
+
+```text
+Break down sales by product and channel. Highlight the top combinations.
+```
+
+### Outlier And Data Quality
+
+```text
+Find unusual spikes or outliers in revenue. Use Python if needed and explain your method.
+```
+
+```text
+Check for missing values, duplicate IDs, strange date ranges, and columns that may need cleaning.
+```
+
+### Follow-Up Chat
+
+After one answer, ask:
+
+```text
+Now show the same analysis by region.
+```
+
+```text
+Turn that into a line chart instead.
+```
+
+```text
+Explain the SQL you used in simple terms.
+```
+
+```text
+What business action would you recommend investigating next, without claiming causality?
 ```
 
 ## Safety Notes
@@ -112,12 +190,12 @@ python scripts/load_sqlite.py
 
 ## Suggested Next Steps
 
-- Test the LangChain loop with real datamart-shaped CSV extracts.
-- Add datamart connector tools.
-- Add approved SQL/view-access tools.
-- Add chart/dashboard spec tools.
-- Add screenshot-to-chart-spec tooling for Tableau replication.
-- Add stronger execution sandboxing before production or platform exposure.
-- Move to explicit LangGraph only when the workflow needs durable state, approvals, retries, or multiple specialist agents.
-
-For the longer previous workbook, see [`docs/agent_workbook.md`](docs/agent_workbook.md).
+1. Test with real datamart-shaped CSV extracts and collect failure cases.
+2. Add a safer Python execution service or disable Python for demos where risk is unacceptable.
+3. Add better chart-spec output, including KPI cards and multi-chart report sections.
+4. Add datamart connector tools that expose only approved schemas/views.
+5. Add metadata retrieval so the agent can handle many tables without stuffing all context into the prompt.
+6. Add a query approval step for large/expensive datamart queries.
+7. Add evaluation tests for 30-50 realistic questions.
+8. Add Tableau screenshot interpretation once CSV/datamart question answering is stable.
+9. Move to explicit LangGraph when we need durable multi-stage workflows, approvals, retries, or multiple specialist agents.

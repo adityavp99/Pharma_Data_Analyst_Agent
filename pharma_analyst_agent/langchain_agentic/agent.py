@@ -239,7 +239,7 @@ class AgenticCSVAnalyst:
 
         return [inspect_dataset, query_dataset_sql, run_python_analysis, propose_chart]
 
-    def run(self, question: str) -> dict[str, Any]:
+    def run(self, question: str, chat_history: list[dict[str, str]] | None = None) -> dict[str, Any]:
         try:
             from langchain.agents import create_agent
         except ImportError as exc:
@@ -250,16 +250,22 @@ class AgenticCSVAnalyst:
         llm = build_chat_model()
         tools = self._build_tools()
         agent = create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
+        messages = [
+            {"role": message["role"], "content": message["content"]}
+            for message in (chat_history or [])[-8:]
+            if message.get("role") in {"user", "assistant"} and message.get("content")
+        ]
+        messages.append({"role": "user", "content": question})
         response = agent.invoke(
-            {"messages": [{"role": "user", "content": question}]},
+            {"messages": messages},
             config={"recursion_limit": AGENT_RECURSION_LIMIT},
         )
-        messages = response.get("messages", [])
-        final_answer = _message_to_text(messages[-1]) if messages else ""
+        response_messages = response.get("messages", [])
+        final_answer = _message_to_text(response_messages[-1]) if response_messages else ""
         return {
             "answer": final_answer,
-            "messages": messages,
-            "tool_trace": self._format_trace(messages),
+            "messages": response_messages,
+            "tool_trace": self._format_trace(response_messages),
             "chart_plan": self.state.get("chart_plan"),
             "last_sql_result": self.state.get("last_sql_result"),
             "last_python_result": self.state.get("last_python_result"),

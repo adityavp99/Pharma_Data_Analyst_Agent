@@ -4,7 +4,7 @@
 
 The Streamlit app now points to a new LangChain-based agentic workflow under `langchain_agentic/`.
 
-The old deterministic MVP files still exist in the repo for reference, but the active app no longer uses:
+The old deterministic MVP files have been removed from the active workspace. The app no longer uses:
 
 - deterministic question routing
 - pharma semantic-layer matching
@@ -16,13 +16,14 @@ The active flow is now:
 
 1. User uploads a CSV.
 2. The app stores that CSV as a temporary SQLite table.
-3. User asks one open-ended question.
+3. User asks an open-ended question in a chat interface.
 4. LangChain `create_agent` starts a multi-step agent loop.
 5. The LLM decides which tools to call, in what order, and how many times.
 6. The tools return observations.
 7. The LLM uses those observations to decide whether more tool calls are needed.
 8. The LLM writes the final answer.
 9. Streamlit renders the answer, latest SQL result, Python result, chart, and tool trace.
+10. Recent chat turns are passed back to the agent so the user can ask follow-up questions.
 
 ## Why This Is More Agentic
 
@@ -39,11 +40,27 @@ The new version gives the LLM tools and lets it operate in a loop:
 
 The backend no longer decides "this is SQL only" or "this needs Python." The agent decides.
 
+The interface is now chat-based, so the user can ask:
+
+```text
+Now break that down by region.
+```
+
+or:
+
+```text
+Use the same calculation but show it as a trend.
+```
+
+The app sends recent user/assistant turns into the next agent run. This is short-term session memory, not long-term persistent memory.
+
 ## Active Files
 
 `app.py`
 
 The Streamlit front end. It handles CSV upload, question input, and result rendering.
+
+It also stores chat turns in `st.session_state` so follow-up questions do not require restating the whole context.
 
 `langchain_agentic/llm_factory.py`
 
@@ -206,6 +223,20 @@ Expected behavior:
 - agent uses SQL or Python depending on the columns it finds
 - agent proposes a line chart if date and numeric columns exist
 - answer explains the evidence
+
+Then test follow-ups:
+
+```text
+Now compare the top result against the next three.
+```
+
+```text
+Create a chart for that.
+```
+
+```text
+Explain the calculation in plain English.
+```
 
 ## Why We Are Not Using The Platform Yet
 

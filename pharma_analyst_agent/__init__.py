@@ -1,1 +1,1 @@
-"""Local MVP package for the synthetic pharma analyst agent."""
+"""Local LangChain agentic CSV analyst prototype."""
