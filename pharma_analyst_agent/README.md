@@ -94,6 +94,7 @@ For a detailed explanation of this pivot, see [`docs/langchain_agentic_pivot.md`
 - SQL is still read-only.
 - Chart proposals are now validated before rendering.
 - Plotly charts are more interactive than the previous basic Altair charts.
+- Compact period columns such as `202506` are treated as year-month time dimensions, not numeric measures.
 - The project is small enough to move quickly.
 - Azure OpenAI, OpenAI, and OpenRouter provider paths are separated cleanly.
 - The code is now easier to map to future datamart tools because the tools are generic.
@@ -105,6 +106,7 @@ For a detailed explanation of this pivot, see [`docs/langchain_agentic_pivot.md`
 - **Large data:** the current CSV-to-SQLite path is not designed for very large enterprise datamarts.
 - **Context management:** the agent only sees recent chat turns and tool outputs. For many tables, we will need schema retrieval, table selection, and possibly a metadata/vector layer.
 - **Chart sophistication:** chart specs are validated now, but dashboard-level layout, KPI cards, advanced formatting, and Tableau-like replication still need dedicated tools.
+- **Column semantics:** obvious date patterns such as `YYYYMM`, `YYYY`, and date strings are detected, but business-specific metric definitions still need metadata/datamart context.
 - **Reliability evaluation:** we need a test set of realistic business questions with expected SQL/outputs.
 - **Human approval:** there is no approval checkpoint before expensive queries or report publishing.
 - **Observability:** we show a local trace, but production needs logs, cost tracking, latency, and failure categorization.
@@ -172,6 +174,10 @@ Create the best chart for comparing total revenue by product. If the first chart
 
 ```text
 Create a trend chart, but first aggregate the data to the right grain so the chart is not too crowded.
+```
+
+```text
+Use year_month as the monthly time axis, not as a measure. Show monthly revenue trend.
 ```
 
 ### Follow-Up Chat

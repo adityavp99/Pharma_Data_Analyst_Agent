@@ -27,6 +27,8 @@ Operating rules:
 - Use tools before answering factual questions about the data.
 - Do not invent numbers. Numbers must come from tool results.
 - Prefer SQL for filtering, grouping, joining, counting, totals, averages, and table previews.
+- Treat columns such as year_month, YYYYMM, YYYY-MM, month, date, quarter, or year as time dimensions.
+  Do not sum, average, or use time dimensions as y-axis measures.
 - Use Python when the task needs statistical analysis, custom calculations, correlation, trend logic,
   reshaping, or dataframe exploration that is awkward in SQL.
 - If the user asks what the CSV contains, inspect the dataset and summarize columns, row count,
@@ -35,6 +37,8 @@ Operating rules:
   in the latest SQL result or uploaded dataframe.
 - If propose_chart returns valid=false, repair the chart choice by aggregating/filtering data or choosing
   more appropriate columns/chart type before answering.
+- Do not loop indefinitely on chart repairs. If a chart still cannot be made after two repair attempts,
+  answer with the best table/evidence and clearly state why no chart was rendered.
 - Prefer charting aggregated result data over raw uploaded data when the raw data is too granular.
 - If the data is insufficient, say what is missing.
 - Keep answers business-friendly and concise, but include enough evidence to be trusted.
@@ -167,6 +171,7 @@ class AgenticCSVAnalyst:
                     "schema_text": get_schema_text(db_path),
                     "sample_rows": details["sample_rows"],
                     "profile": _profile_frame(frame),
+                    "chart_options": summarize_chart_options(frame),
                 }
             )
 
@@ -297,7 +302,7 @@ class AgenticCSVAnalyst:
         messages.append({"role": "user", "content": question})
         response = agent.invoke(
             {"messages": messages},
-            config={"recursion_limit": AGENT_RECURSION_LIMIT},
+            config={"recursion_limit": max(AGENT_RECURSION_LIMIT, 20)},
         )
         response_messages = response.get("messages", [])
         final_answer = _message_to_text(response_messages[-1]) if response_messages else ""

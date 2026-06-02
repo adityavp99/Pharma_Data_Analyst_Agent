@@ -9,8 +9,30 @@ import plotly.express as px
 SUPPORTED_CHART_TYPES = {"bar", "line", "scatter", "area"}
 
 
+def _clean_compact_date_strings(series: pd.Series) -> pd.Series:
+    return series.dropna().astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
+
+
+def _is_compact_year_month(series: pd.Series) -> bool:
+    sample = _clean_compact_date_strings(series).head(50)
+    if sample.empty:
+        return False
+    matches = sample.str.match(r"^(19|20)\d{2}(0[1-9]|1[0-2])$")
+    return bool(matches.mean() >= 0.8)
+
+
+def _is_year_like(series: pd.Series) -> bool:
+    sample = _clean_compact_date_strings(series).head(50)
+    if sample.empty:
+        return False
+    matches = sample.str.match(r"^(19|20)\d{2}$")
+    return bool(matches.mean() >= 0.8)
+
+
 def _is_datetime_like(series: pd.Series) -> bool:
     if pd.api.types.is_datetime64_any_dtype(series):
+        return True
+    if _is_compact_year_month(series) or _is_year_like(series):
         return True
     sample = series.dropna().astype(str).head(50)
     if sample.empty:
@@ -22,20 +44,32 @@ def _is_datetime_like(series: pd.Series) -> bool:
     return bool(len(series) > 0 and parsed.notna().mean() >= 0.8)
 
 
-def _column_role(series: pd.Series) -> str:
+def infer_column_role(series: pd.Series) -> str:
+    if _is_datetime_like(series):
+        return "datetime"
     numeric = pd.to_numeric(series, errors="coerce")
     if numeric.notna().mean() >= 0.8:
         return "numeric"
-    if _is_datetime_like(series):
-        return "datetime"
     return "categorical"
+
+
+def convert_temporal_series(series: pd.Series) -> pd.Series:
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return series
+    if _is_compact_year_month(series):
+        values = _clean_compact_date_strings(series).reindex(series.index)
+        return pd.to_datetime(values + "01", format="%Y%m%d", errors="coerce")
+    if _is_year_like(series):
+        values = _clean_compact_date_strings(series).reindex(series.index)
+        return pd.to_datetime(values + "0101", format="%Y%m%d", errors="coerce")
+    return pd.to_datetime(series, errors="coerce")
 
 
 def summarize_chart_options(frame: pd.DataFrame) -> dict[str, Any]:
     columns = []
     for column in frame.columns:
         series = frame[column]
-        role = _column_role(series)
+        role = infer_column_role(series)
         item: dict[str, Any] = {
             "name": column,
             "role": role,
@@ -46,12 +80,17 @@ def summarize_chart_options(frame: pd.DataFrame) -> dict[str, Any]:
             numeric = pd.to_numeric(series, errors="coerce")
             item["min"] = float(numeric.min())
             item["max"] = float(numeric.max())
+        if role == "datetime":
+            item["chart_note"] = "Use as a time/dimension column, not as a summed measure."
         columns.append(item)
 
     return {
         "row_count": len(frame),
         "columns": columns,
+        "time_candidates": [column["name"] for column in columns if column["role"] == "datetime"],
+        "measure_candidates": [column["name"] for column in columns if column["role"] == "numeric"],
         "chart_guidance": [
+            "Columns with role=datetime are time dimensions. Do not sum or average them as measures.",
             "Use line or area charts for time trends.",
             "Use bar charts for category comparisons, ideally with 20 or fewer x-axis categories.",
             "Use scatter charts for relationships between two numeric measures.",
@@ -82,13 +121,17 @@ def validate_chart_plan(frame: pd.DataFrame, plan: dict[str, Any]) -> dict[str, 
     if issues:
         return {"valid": False, "issues": issues, "warnings": warnings, "plan": plan}
 
-    y_numeric = pd.to_numeric(frame[y_col], errors="coerce")
-    if y_numeric.notna().mean() < 0.8:
-        issues.append(f"y_col `{y_col}` is not mostly numeric, so it cannot be used as a quantitative y-axis.")
-
-    x_role = _column_role(frame[x_col])
-    y_role = _column_role(frame[y_col])
+    x_role = infer_column_role(frame[x_col])
+    y_role = infer_column_role(frame[y_col])
     x_unique = int(frame[x_col].nunique(dropna=True))
+
+    y_numeric = pd.to_numeric(frame[y_col], errors="coerce")
+    if y_role == "datetime":
+        issues.append(
+            f"y_col `{y_col}` looks like a date/time period, so it should be used as an x-axis or grouping dimension, not summed as a measure."
+        )
+    elif y_numeric.notna().mean() < 0.8:
+        issues.append(f"y_col `{y_col}` is not mostly numeric, so it cannot be used as a quantitative y-axis.")
 
     if chart_type in {"line", "area"} and x_role not in {"datetime", "numeric"}:
         issues.append(
@@ -117,7 +160,7 @@ def validate_chart_plan(frame: pd.DataFrame, plan: dict[str, Any]) -> dict[str, 
         "roles": {
             "x_col": x_role,
             "y_col": y_role,
-            "group_by": _column_role(frame[group_by]) if group_by else None,
+            "group_by": infer_column_role(frame[group_by]) if group_by else None,
         },
     }
 
@@ -128,7 +171,7 @@ def prepare_chart_frame(frame: pd.DataFrame, plan: dict[str, Any]) -> pd.DataFra
     y_col = plan["y_col"]
     prepared[y_col] = pd.to_numeric(prepared[y_col], errors="coerce")
     if _is_datetime_like(prepared[x_col]):
-        prepared[x_col] = pd.to_datetime(prepared[x_col], errors="coerce")
+        prepared[x_col] = convert_temporal_series(prepared[x_col])
     return prepared.dropna(subset=[x_col, y_col])
 
 
