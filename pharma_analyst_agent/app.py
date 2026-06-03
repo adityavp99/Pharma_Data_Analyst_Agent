@@ -84,7 +84,9 @@ def render_trace(trace: list[dict[str, Any]]) -> None:
 
 
 def render_result_details(result: dict[str, Any], db_path: Path, table_name: str) -> None:
-    tabs = st.tabs(["Chart", "Latest SQL Result", "Python Result", "Guardrails", "Agent Trace", "Generated SQL"])
+    tabs = st.tabs(
+        ["Chart", "Latest SQL Result", "Python Result", "Guardrails", "Diagnostics", "Agent Trace", "Generated SQL"]
+    )
 
     with tabs[0]:
         render_agent_chart(result, db_path, table_name)
@@ -113,9 +115,26 @@ def render_result_details(result: dict[str, Any], db_path: Path, table_name: str
             st.info("No guardrail interventions were triggered for this answer.")
 
     with tabs[4]:
-        render_trace(result.get("tool_trace", []))
+        diagnostics = result.get("diagnostics")
+        if diagnostics:
+            st.write("Likely causes")
+            for cause in diagnostics.get("likely_causes", []):
+                st.write(f"- {cause}")
+            st.write("Tool counts")
+            st.json(diagnostics.get("tool_counts", {}))
+            st.write("Recent tool events")
+            st.json(diagnostics.get("recent_tool_events", []))
+            with st.expander("Full diagnostic payload", expanded=False):
+                st.json({key: value for key, value in diagnostics.items() if key != "traceback"})
+            with st.expander("Traceback", expanded=False):
+                st.code(diagnostics.get("traceback", ""), language="python")
+        else:
+            st.info("No runtime diagnostics were captured for this answer.")
 
     with tabs[5]:
+        render_trace(result.get("tool_trace", []))
+
+    with tabs[6]:
         sql_queries = result.get("sql_queries", [])
         if sql_queries:
             for query in sql_queries:

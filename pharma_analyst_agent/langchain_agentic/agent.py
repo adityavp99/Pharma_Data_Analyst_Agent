@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from contextlib import redirect_stdout
+from collections import Counter
 from io import StringIO
 from pathlib import Path
 import json
 import sqlite3
+import traceback
 from typing import Any
 
 import numpy as np
@@ -16,6 +18,11 @@ from langchain_agentic.guardrails import check_user_request, validate_python_ana
 from langchain_agentic.llm_factory import LangChainAgentError, build_chat_model
 from tools.schema_tool import describe_table, get_schema_text, get_table_row_counts
 from tools.sql_tool import run_readonly_sql
+
+try:
+    from langgraph.errors import GraphRecursionError
+except ImportError:  # pragma: no cover - LangChain installs LangGraph in the current stack.
+    GraphRecursionError = RuntimeError
 
 
 SYSTEM_PROMPT = """
@@ -41,6 +48,8 @@ Operating rules:
   more appropriate columns/chart type before answering.
 - Do not loop indefinitely on chart repairs. If a chart still cannot be made after two repair attempts,
   answer with the best table/evidence and clearly state why no chart was rendered.
+- If a tool returns an error or validation failure repeatedly, stop trying the same failing action and answer
+  with the best available evidence plus the limitation.
 - Prefer charting aggregated result data over raw uploaded data when the raw data is too granular.
 - If the data is insufficient, say what is missing.
 - Keep answers business-friendly and concise, but include enough evidence to be trusted.
@@ -171,6 +180,92 @@ def _frame_from_sql_result(result: dict[str, Any] | None) -> pd.DataFrame | None
     return pd.DataFrame(result.get("rows", []), columns=result.get("columns", []))
 
 
+def _record_tool_event(state: dict[str, Any], tool_name: str, status: str, details: dict[str, Any] | None = None) -> None:
+    state.setdefault("tool_events", []).append(
+        {
+            "tool": tool_name,
+            "status": status,
+            "details": details or {},
+        }
+    )
+
+
+def _tool_counts(state: dict[str, Any]) -> dict[str, int]:
+    return dict(Counter(event["tool"] for event in state.get("tool_events", [])))
+
+
+def _infer_error_causes(error_type: str, state: dict[str, Any]) -> list[str]:
+    causes: list[str] = []
+    counts = _tool_counts(state)
+    repeated_tools = [tool for tool, count in counts.items() if count >= 3]
+
+    if error_type == "recursion_limit":
+        causes.append(
+            "The LangChain/LangGraph agent used all available reasoning/tool-call steps before producing a final answer."
+        )
+        if repeated_tools:
+            causes.append(f"Repeated tool calls were detected: {', '.join(repeated_tools)}.")
+        if state.get("chart_validation") and not state["chart_validation"].get("valid", True):
+            causes.append("The agent may have been trying to repair an invalid chart specification.")
+        if any(event["status"] == "error" for event in state.get("tool_events", [])):
+            causes.append("One or more tools returned errors, which can cause the agent to retry.")
+        last_sql_result = state.get("last_sql_result") or {}
+        last_python_result = state.get("last_python_result") or {}
+        if last_sql_result.get("error"):
+            causes.append("The latest SQL attempt failed, which can trigger repeated SQL repair attempts.")
+        if last_python_result.get("error"):
+            causes.append("The latest Python analysis attempt failed, which can trigger repeated code repair attempts.")
+    else:
+        causes.append("An unexpected runtime error occurred while the agent was planning or calling tools.")
+
+    if not causes:
+        causes.append("No specific repeated tool pattern was captured.")
+    return causes
+
+
+def _diagnostic_result(
+    *,
+    question: str,
+    error: Exception,
+    error_type: str,
+    state: dict[str, Any],
+    recursion_limit: int,
+) -> dict[str, Any]:
+    diagnostics = {
+        "error_type": error_type,
+        "exception_type": error.__class__.__name__,
+        "exception_message": str(error),
+        "recursion_limit": recursion_limit,
+        "likely_causes": _infer_error_causes(error_type, state),
+        "tool_counts": _tool_counts(state),
+        "recent_tool_events": state.get("tool_events", [])[-12:],
+        "sql_query_count": len(state.get("sql_queries", [])),
+        "python_run_count": len(state.get("python_runs", [])),
+        "chart_validation": state.get("chart_validation"),
+        "traceback": traceback.format_exc(),
+    }
+    answer = (
+        "The agentic run did not complete. It hit the reasoning/tool-call recursion limit before "
+        "it could produce a final answer.\n\n"
+        "Most common causes are repeated SQL repair attempts, repeated Python repair attempts, invalid chart "
+        "repair loops, or a question that asks for too many tasks at once. Try narrowing the question, asking "
+        "for one chart/table at a time, or explicitly naming the columns and aggregation grain."
+    )
+    return {
+        "answer": answer,
+        "messages": [],
+        "tool_trace": [],
+        "chart_plan": state.get("chart_plan"),
+        "chart_validation": state.get("chart_validation"),
+        "last_sql_result": state.get("last_sql_result"),
+        "last_python_result": state.get("last_python_result"),
+        "sql_queries": state.get("sql_queries", []),
+        "python_runs": state.get("python_runs", []),
+        "guardrails": state.get("guardrails", []),
+        "diagnostics": diagnostics,
+    }
+
+
 class AgenticCSVAnalyst:
     def __init__(self, db_path: str | Path, table_name: str):
         self.db_path = Path(db_path)
@@ -184,6 +279,7 @@ class AgenticCSVAnalyst:
             "last_sql_result": None,
             "last_python_result": None,
             "guardrails": [],
+            "tool_events": [],
         }
 
     def _build_tools(self):
@@ -202,7 +298,9 @@ class AgenticCSVAnalyst:
         @tool
         def inspect_dataset() -> str:
             """Inspect uploaded CSV schema, row counts, sample rows, and column-level profile."""
+            _record_tool_event(state, "inspect_dataset", "started")
             details = describe_table(table_name, db_path, sample_rows=8)
+            _record_tool_event(state, "inspect_dataset", "success", {"sample_rows": 8})
             return _safe_json(
                 {
                     "row_counts": get_table_row_counts(db_path),
@@ -216,26 +314,37 @@ class AgenticCSVAnalyst:
         @tool
         def inspect_data_quality() -> str:
             """Inspect missing values, duplicate rows, possible keys, cardinality, and numeric ranges."""
+            _record_tool_event(state, "inspect_data_quality", "success")
             return _safe_json(_data_quality_summary(frame))
 
         @tool
         def query_dataset_sql(sql: str) -> str:
             """Run one read-only SQLite SELECT or WITH query against the uploaded CSV table."""
+            _record_tool_event(state, "query_dataset_sql", "started", {"sql_preview": sql[:500]})
             result = run_readonly_sql(sql, db_path, max_rows=AGENT_MAX_SQL_ROWS)
             state["sql_queries"].append(sql)
             state["last_sql_result"] = result
+            _record_tool_event(
+                state,
+                "query_dataset_sql",
+                "error" if result.get("error") else "success",
+                {"row_count": result.get("row_count", 0), "error": result.get("error", "")},
+            )
             return _safe_json(_limited_observation(result))
 
         @tool
         def run_python_analysis(code: str) -> str:
             """Run local pandas analysis code against dataframe df and store answer in variable result."""
             if not AGENT_ENABLE_PYTHON_TOOL:
+                _record_tool_event(state, "run_python_analysis", "error", {"error": "Python analysis tool is disabled."})
                 return _safe_json({"error": "Python analysis tool is disabled."})
+            _record_tool_event(state, "run_python_analysis", "started", {"code_preview": code[:500]})
             guardrail = validate_python_analysis_code(code)
             if not guardrail.allowed:
                 payload = {"error": guardrail.reason, "guardrail": guardrail.to_dict()}
                 state["guardrails"].append(guardrail.to_dict())
                 state["last_python_result"] = payload
+                _record_tool_event(state, "run_python_analysis", "guardrail_blocked", guardrail.to_dict())
                 return _safe_json(payload)
 
             stdout = StringIO()
@@ -280,17 +389,30 @@ class AgenticCSVAnalyst:
 
             state["python_runs"].append(code)
             state["last_python_result"] = payload
+            _record_tool_event(
+                state,
+                "run_python_analysis",
+                "error" if payload.get("error") else "success",
+                {"error": payload.get("error", "")},
+            )
             return _safe_json(payload)
 
         @tool
         def inspect_chart_options(data_source: str = "latest_sql_result") -> str:
             """Inspect available columns and chart suitability for latest_sql_result or uploaded_dataframe."""
+            requested_source = data_source
             source_frame = None
             if data_source == "latest_sql_result":
                 source_frame = _frame_from_sql_result(state.get("last_sql_result"))
             if source_frame is None:
                 source_frame = frame
                 data_source = "uploaded_dataframe"
+            _record_tool_event(
+                state,
+                "inspect_chart_options",
+                "success",
+                {"requested_source": requested_source, "resolved_source": data_source, "row_count": len(source_frame)},
+            )
             return _safe_json(
                 {
                     "data_source": data_source,
@@ -308,6 +430,12 @@ class AgenticCSVAnalyst:
             data_source: str = "latest_sql_result",
         ) -> str:
             """Validate and propose a chart. If valid=false, revise the chart before final answer."""
+            _record_tool_event(
+                state,
+                "propose_chart",
+                "started",
+                {"chart_type": chart_type, "x_col": x_col, "y_col": y_col, "data_source": data_source},
+            )
             source_frame = None
             if data_source == "latest_sql_result":
                 source_frame = _frame_from_sql_result(state.get("last_sql_result"))
@@ -328,6 +456,12 @@ class AgenticCSVAnalyst:
                 state["chart_plan"] = plan
             else:
                 state["chart_plan"] = None
+            _record_tool_event(
+                state,
+                "propose_chart",
+                "success" if validation["valid"] else "validation_failed",
+                {"issues": validation.get("issues", []), "warnings": validation.get("warnings", [])},
+            )
             return _safe_json(validation)
 
         return [
@@ -362,21 +496,32 @@ class AgenticCSVAnalyst:
                 "sql_queries": [],
                 "python_runs": [],
                 "guardrails": self.state["guardrails"],
+                "diagnostics": None,
             }
 
         llm = build_chat_model()
         tools = self._build_tools()
         agent = create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
+        recursion_limit = max(AGENT_RECURSION_LIMIT, 20)
         messages = [
             {"role": message["role"], "content": message["content"]}
             for message in (chat_history or [])[-8:]
             if message.get("role") in {"user", "assistant"} and message.get("content")
         ]
         messages.append({"role": "user", "content": question})
-        response = agent.invoke(
-            {"messages": messages},
-            config={"recursion_limit": max(AGENT_RECURSION_LIMIT, 20)},
-        )
+        try:
+            response = agent.invoke(
+                {"messages": messages},
+                config={"recursion_limit": recursion_limit},
+            )
+        except GraphRecursionError as exc:
+            return _diagnostic_result(
+                question=question,
+                error=exc,
+                error_type="recursion_limit",
+                state=self.state,
+                recursion_limit=recursion_limit,
+            )
         response_messages = response.get("messages", [])
         final_answer = _message_to_text(response_messages[-1]) if response_messages else ""
         return {
@@ -390,6 +535,7 @@ class AgenticCSVAnalyst:
             "sql_queries": self.state.get("sql_queries", []),
             "python_runs": self.state.get("python_runs", []),
             "guardrails": self.state.get("guardrails", []),
+            "diagnostics": None,
         }
 
     @staticmethod

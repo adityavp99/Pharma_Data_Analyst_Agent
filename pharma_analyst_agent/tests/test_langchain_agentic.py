@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from langchain_agentic import AgenticCSVAnalyst
+from langchain_agentic.agent import _diagnostic_result
 from langchain_agentic.charting import prepare_chart_frame, summarize_chart_options, validate_chart_plan
 
 
@@ -178,3 +179,41 @@ def test_data_quality_tool_reports_duplicates_and_possible_keys(tmp_path: Path) 
     assert quality["duplicate_row_count"] == 1
     assert "sales" in quality["columns_with_missing_values"]
     assert quality["row_count"] == 3
+
+
+def test_tool_events_are_recorded_for_diagnostics(tmp_path: Path) -> None:
+    analyst = AgenticCSVAnalyst(_make_db(tmp_path), "uploaded_data")
+    tools = {tool.name: tool for tool in analyst._build_tools()}
+
+    tools["query_dataset_sql"].invoke({"sql": "SELECT product, SUM(sales) AS sales FROM uploaded_data GROUP BY product"})
+
+    events = analyst.state["tool_events"]
+    assert any(event["tool"] == "query_dataset_sql" and event["status"] == "started" for event in events)
+    assert any(event["tool"] == "query_dataset_sql" and event["status"] == "success" for event in events)
+
+
+def test_recursion_diagnostic_result_includes_trace_and_causes(tmp_path: Path) -> None:
+    analyst = AgenticCSVAnalyst(_make_db(tmp_path), "uploaded_data")
+    analyst.state["tool_events"] = [
+        {"tool": "propose_chart", "status": "validation_failed", "details": {"issues": ["bad chart"]}},
+        {"tool": "propose_chart", "status": "validation_failed", "details": {"issues": ["bad chart"]}},
+        {"tool": "propose_chart", "status": "validation_failed", "details": {"issues": ["bad chart"]}},
+    ]
+    analyst.state["chart_validation"] = {"valid": False, "issues": ["bad chart"]}
+
+    try:
+        raise RuntimeError("recursion")
+    except RuntimeError as exc:
+        result = _diagnostic_result(
+            question="make a chart",
+            error=exc,
+            error_type="recursion_limit",
+            state=analyst.state,
+            recursion_limit=20,
+        )
+
+    assert "recursion limit" in result["answer"].lower()
+    assert result["diagnostics"]["error_type"] == "recursion_limit"
+    assert result["diagnostics"]["tool_counts"]["propose_chart"] == 3
+    assert "Traceback" in result["diagnostics"]["traceback"]
+    assert any("Repeated tool calls" in cause for cause in result["diagnostics"]["likely_causes"])

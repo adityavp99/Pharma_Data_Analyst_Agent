@@ -131,6 +131,98 @@ These are the main pieces of code owned by this project:
 
 LangChain provides the agent runtime through `create_agent`. The LLM provider supplies the model. Everything above is the local orchestration, tool, UI, validation, and guardrail layer we wrote ourselves.
 
+## Recursion Limit And Error Diagnostics
+
+LangChain `create_agent` runs as a graph-style loop. Each model step and tool call consumes part of the recursion budget. If the agent keeps calling tools and never produces a final answer, LangGraph raises a recursion-limit error.
+
+The app now catches this and shows a `Diagnostics` tab with:
+
+- exception type and message
+- recursion limit used
+- likely causes
+- tool call counts
+- recent tool events
+- latest SQL/Python/chart state
+- full traceback
+
+Common causes of recursion-limit errors:
+
+- The agent keeps trying to repair invalid SQL.
+- The agent keeps trying to repair blocked Python code.
+- The agent keeps trying to repair an invalid chart.
+- The question asks for too many outputs in one turn, such as multiple KPI cards, multiple charts, data quality, and narrative insight all at once.
+- The uploaded CSV does not contain the columns needed for the requested analysis.
+- The model repeatedly misunderstands a business-specific column name because no metadata/dictionary exists yet.
+
+When this happens, reframe the question into one smaller task:
+
+```text
+First, inspect the dataset and identify the date, dimension, and measure columns.
+```
+
+Then:
+
+```text
+Now create one monthly revenue trend using year_month as the time axis and revenue as the measure.
+```
+
+## Other Errors You May See
+
+- **LLM/provider errors:** wrong endpoint, expired key, blocked network, unavailable deployment, or model not supporting tool calls.
+- **SQL errors:** nonexistent columns, wrong table name, invalid SQLite syntax, or unsafe SQL blocked by the read-only validator.
+- **Python guardrail errors:** model-generated code tried imports, file access, database access, unsafe builtins, or overly complex logic.
+- **Chart validation errors:** wrong y-axis, too many categories, invalid chart type, missing chart columns, or using a date as a measure.
+- **CSV loading errors:** malformed CSV, unsupported encoding, duplicate weird headers, or very large files.
+- **Data interpretation errors:** ambiguous column names, missing metadata, business-specific abbreviations, or multiple possible grains.
+
+## Questions And Framing That Do Not Work Well Yet
+
+Avoid asking for too much in one turn:
+
+```text
+Create a full dashboard with all KPIs, trends, segments, outliers, recommendations, and explain everything.
+```
+
+Ask in stages instead:
+
+```text
+Identify the likely KPIs in this dataset.
+```
+
+```text
+Create one KPI summary table.
+```
+
+```text
+Now create a monthly trend chart for the most important measure.
+```
+
+Avoid vague metric names if the CSV does not contain clear columns:
+
+```text
+Show performance.
+```
+
+Better:
+
+```text
+Use revenue as the performance measure and compare it by product and month.
+```
+
+Do not ask for row-level dumps:
+
+```text
+Show all rows.
+```
+
+Better:
+
+```text
+Show a 10-row sample and summarize the main columns.
+```
+
+Do not ask for clinical, medical, legal, regulatory, or treatment recommendations. The agent is only for analytical exploration of structured data.
+
 ## What Else To Test
 
 Start with one CSV that resembles one of your real datamarts. Then test these categories:
