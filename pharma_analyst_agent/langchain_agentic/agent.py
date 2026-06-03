@@ -12,6 +12,7 @@ import pandas as pd
 
 from config import AGENT_ENABLE_PYTHON_TOOL, AGENT_MAX_SQL_ROWS, AGENT_RECURSION_LIMIT
 from langchain_agentic.charting import summarize_chart_options, validate_chart_plan
+from langchain_agentic.guardrails import check_user_request, validate_python_analysis_code
 from langchain_agentic.llm_factory import LangChainAgentError, build_chat_model
 from tools.schema_tool import describe_table, get_schema_text, get_table_row_counts
 from tools.sql_tool import run_readonly_sql
@@ -33,6 +34,7 @@ Operating rules:
   reshaping, or dataframe exploration that is awkward in SQL.
 - If the user asks what the CSV contains, inspect the dataset and summarize columns, row count,
   sample values, likely meaning, and good follow-up question ideas.
+- If the user asks about data trust, quality, missingness, duplicates, or cleaning, call inspect_data_quality.
 - If a visual would help, use inspect_chart_options first, then call propose_chart with columns that exist
   in the latest SQL result or uploaded dataframe.
 - If propose_chart returns valid=false, repair the chart choice by aggregating/filtering data or choosing
@@ -97,6 +99,41 @@ def _profile_frame(frame: pd.DataFrame) -> dict[str, Any]:
     }
 
 
+def _data_quality_summary(frame: pd.DataFrame) -> dict[str, Any]:
+    duplicate_rows = int(frame.duplicated().sum())
+    columns: list[dict[str, Any]] = []
+    for column in frame.columns:
+        series = frame[column]
+        null_count = int(series.isna().sum())
+        unique_count = int(series.nunique(dropna=True))
+        total = len(series)
+        item: dict[str, Any] = {
+            "name": column,
+            "dtype": str(series.dtype),
+            "null_count": null_count,
+            "null_rate": round(null_count / total, 4) if total else 0,
+            "unique_count": unique_count,
+            "unique_rate": round(unique_count / total, 4) if total else 0,
+        }
+        if unique_count == total and total > 1:
+            item["possible_key"] = True
+        numeric = pd.to_numeric(series, errors="coerce")
+        if numeric.notna().mean() >= 0.8:
+            item["numeric_min"] = float(numeric.min())
+            item["numeric_max"] = float(numeric.max())
+            item["zero_count"] = int((numeric == 0).sum())
+        columns.append(item)
+
+    return {
+        "row_count": len(frame),
+        "column_count": len(frame.columns),
+        "duplicate_row_count": duplicate_rows,
+        "columns_with_missing_values": [column["name"] for column in columns if column["null_count"] > 0],
+        "possible_key_columns": [column["name"] for column in columns if column.get("possible_key")],
+        "columns": columns,
+    }
+
+
 def _limited_observation(result: dict[str, Any], row_limit: int = 50) -> dict[str, Any]:
     if "error" in result:
         return result
@@ -146,6 +183,7 @@ class AgenticCSVAnalyst:
             "chart_validation": None,
             "last_sql_result": None,
             "last_python_result": None,
+            "guardrails": [],
         }
 
     def _build_tools(self):
@@ -176,6 +214,11 @@ class AgenticCSVAnalyst:
             )
 
         @tool
+        def inspect_data_quality() -> str:
+            """Inspect missing values, duplicate rows, possible keys, cardinality, and numeric ranges."""
+            return _safe_json(_data_quality_summary(frame))
+
+        @tool
         def query_dataset_sql(sql: str) -> str:
             """Run one read-only SQLite SELECT or WITH query against the uploaded CSV table."""
             result = run_readonly_sql(sql, db_path, max_rows=AGENT_MAX_SQL_ROWS)
@@ -188,6 +231,12 @@ class AgenticCSVAnalyst:
             """Run local pandas analysis code against dataframe df and store answer in variable result."""
             if not AGENT_ENABLE_PYTHON_TOOL:
                 return _safe_json({"error": "Python analysis tool is disabled."})
+            guardrail = validate_python_analysis_code(code)
+            if not guardrail.allowed:
+                payload = {"error": guardrail.reason, "guardrail": guardrail.to_dict()}
+                state["guardrails"].append(guardrail.to_dict())
+                state["last_python_result"] = payload
+                return _safe_json(payload)
 
             stdout = StringIO()
             local_vars: dict[str, Any] = {
@@ -281,7 +330,14 @@ class AgenticCSVAnalyst:
                 state["chart_plan"] = None
             return _safe_json(validation)
 
-        return [inspect_dataset, query_dataset_sql, run_python_analysis, inspect_chart_options, propose_chart]
+        return [
+            inspect_dataset,
+            inspect_data_quality,
+            query_dataset_sql,
+            run_python_analysis,
+            inspect_chart_options,
+            propose_chart,
+        ]
 
     def run(self, question: str, chat_history: list[dict[str, str]] | None = None) -> dict[str, Any]:
         try:
@@ -290,6 +346,23 @@ class AgenticCSVAnalyst:
             raise LangChainAgentError(
                 "LangChain is not installed. Run `pip install -r requirements.txt`."
             ) from exc
+
+        request_guardrail = check_user_request(question)
+        if not request_guardrail.allowed:
+            refusal = request_guardrail.reason
+            self.state["guardrails"].append(request_guardrail.to_dict())
+            return {
+                "answer": refusal,
+                "messages": [],
+                "tool_trace": [],
+                "chart_plan": None,
+                "chart_validation": None,
+                "last_sql_result": None,
+                "last_python_result": None,
+                "sql_queries": [],
+                "python_runs": [],
+                "guardrails": self.state["guardrails"],
+            }
 
         llm = build_chat_model()
         tools = self._build_tools()
@@ -316,6 +389,7 @@ class AgenticCSVAnalyst:
             "last_python_result": self.state.get("last_python_result"),
             "sql_queries": self.state.get("sql_queries", []),
             "python_runs": self.state.get("python_runs", []),
+            "guardrails": self.state.get("guardrails", []),
         }
 
     @staticmethod

@@ -84,7 +84,7 @@ def render_trace(trace: list[dict[str, Any]]) -> None:
 
 
 def render_result_details(result: dict[str, Any], db_path: Path, table_name: str) -> None:
-    tabs = st.tabs(["Chart", "Latest SQL Result", "Python Result", "Agent Trace", "Generated SQL"])
+    tabs = st.tabs(["Chart", "Latest SQL Result", "Python Result", "Guardrails", "Agent Trace", "Generated SQL"])
 
     with tabs[0]:
         render_agent_chart(result, db_path, table_name)
@@ -106,9 +106,16 @@ def render_result_details(result: dict[str, Any], db_path: Path, table_name: str
             st.info("The agent did not run Python for this answer.")
 
     with tabs[3]:
-        render_trace(result.get("tool_trace", []))
+        guardrails = result.get("guardrails") or []
+        if guardrails:
+            st.json(guardrails)
+        else:
+            st.info("No guardrail interventions were triggered for this answer.")
 
     with tabs[4]:
+        render_trace(result.get("tool_trace", []))
+
+    with tabs[5]:
         sql_queries = result.get("sql_queries", [])
         if sql_queries:
             for query in sql_queries:

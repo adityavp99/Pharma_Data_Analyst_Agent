@@ -76,6 +76,7 @@ pytest
 4. `langchain_agentic/agent.py` creates a LangChain agent with tools.
 5. The agent decides whether to call:
    - `inspect_dataset`
+   - `inspect_data_quality`
    - `query_dataset_sql`
    - `run_python_analysis`
    - `inspect_chart_options`
@@ -92,6 +93,9 @@ For a detailed explanation of this pivot, see [`docs/langchain_agentic_pivot.md`
 - The UI is simple: upload CSV, then chat.
 - Tool traces make the agent behavior inspectable.
 - SQL is still read-only.
+- User request guardrails refuse unsafe requests such as credential extraction, medical advice, prompt extraction, and bulk data dumping.
+- Python code guardrails block imports, file/database reads and writes, unsafe builtins, and overly complex snippets.
+- The agent can inspect data quality: missing values, duplicate rows, likely key columns, cardinality, and numeric ranges.
 - Chart proposals are now validated before rendering.
 - Plotly charts are more interactive than the previous basic Altair charts.
 - Compact period columns such as `202506` are treated as year-month time dimensions, not numeric measures.
@@ -101,7 +105,7 @@ For a detailed explanation of this pivot, see [`docs/langchain_agentic_pivot.md`
 
 ## Major Gaps To Explore And Fix
 
-- **Python sandboxing:** the pandas tool currently runs local model-generated code with restricted builtins. This is fine for local testing, but not enough for production.
+- **Python sandboxing:** the pandas tool now has AST-based guardrails, but it is still local model-generated code execution. Production should use a proper sandboxed execution service.
 - **Data permissions:** uploaded CSV testing does not yet model user-level datamart permissions.
 - **Large data:** the current CSV-to-SQLite path is not designed for very large enterprise datamarts.
 - **Context management:** the agent only sees recent chat turns and tool outputs. For many tables, we will need schema retrieval, table selection, and possibly a metadata/vector layer.
@@ -110,7 +114,22 @@ For a detailed explanation of this pivot, see [`docs/langchain_agentic_pivot.md`
 - **Reliability evaluation:** we need a test set of realistic business questions with expected SQL/outputs.
 - **Human approval:** there is no approval checkpoint before expensive queries or report publishing.
 - **Observability:** we show a local trace, but production needs logs, cost tracking, latency, and failure categorization.
-- **Guardrails:** read-only SQL is enforced locally, but enterprise guardrails should come from approved libraries/services.
+- **Guardrails:** local request, SQL, chart, and Python guardrails exist now, but enterprise deployment should still use approved guardrail/sandbox/audit services.
+
+## Core Functions We Wrote
+
+These are the main pieces of code owned by this project:
+
+- `app.py`: Streamlit CSV upload, chat UI, result tabs, chart rendering, and session state.
+- `langchain_agentic/agent.py`: `AgenticCSVAnalyst`, system prompt, LangChain `create_agent` call, and tool definitions.
+- `langchain_agentic/llm_factory.py`: provider selection for Azure OpenAI, OpenAI, and OpenRouter.
+- `langchain_agentic/charting.py`: chart column role detection, chart validation, compact `YYYYMM` date handling, and Plotly figure creation.
+- `langchain_agentic/guardrails.py`: request guardrails and Python AST/code guardrails.
+- `tools/csv_tool.py`: CSV-to-SQLite loading and safe table naming.
+- `tools/sql_tool.py`: read-only SQL validation and execution.
+- `tools/schema_tool.py`: SQLite schema, row count, and table preview helpers.
+
+LangChain provides the agent runtime through `create_agent`. The LLM provider supplies the model. Everything above is the local orchestration, tool, UI, validation, and guardrail layer we wrote ourselves.
 
 ## What Else To Test
 
@@ -164,6 +183,10 @@ Find unusual spikes or outliers in revenue. Use Python if needed and explain you
 
 ```text
 Check for missing values, duplicate IDs, strange date ranges, and columns that may need cleaning.
+```
+
+```text
+Inspect data quality first, then tell me whether this file is safe to use for KPI reporting.
 ```
 
 ### Chart Quality

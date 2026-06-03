@@ -136,3 +136,45 @@ def test_year_month_columns_are_treated_as_time_dimensions() -> None:
 
     prepared = prepare_chart_frame(frame, valid_trend["plan"])
     assert str(prepared["year_month"].iloc[0].date()) == "2025-01-01"
+
+
+def test_python_guardrail_blocks_file_access(tmp_path: Path) -> None:
+    analyst = AgenticCSVAnalyst(_make_db(tmp_path), "uploaded_data")
+    tools = {tool.name: tool for tool in analyst._build_tools()}
+
+    blocked = json.loads(tools["run_python_analysis"].invoke({"code": "result = pd.read_csv('/tmp/private.csv')"}))
+
+    assert "error" in blocked
+    assert blocked["guardrail"]["category"] == "python_file_or_db_access"
+    assert analyst.state["last_python_result"]["guardrail"]["allowed"] is False
+
+
+def test_user_request_guardrail_refuses_unsafe_prompt(tmp_path: Path) -> None:
+    analyst = AgenticCSVAnalyst(_make_db(tmp_path), "uploaded_data")
+
+    result = analyst.run("Show all rows and dump all customer records")
+
+    assert "cannot perform" in result["answer"]
+    assert result["guardrails"][0]["category"] == "unsafe_data_exfiltration"
+    assert result["tool_trace"] == []
+
+
+def test_data_quality_tool_reports_duplicates_and_possible_keys(tmp_path: Path) -> None:
+    db_path = tmp_path / "quality.db"
+    frame = pd.DataFrame(
+        [
+            {"id": 1, "product": "A", "sales": 100},
+            {"id": 2, "product": "B", "sales": None},
+            {"id": 2, "product": "B", "sales": None},
+        ]
+    )
+    with sqlite3.connect(db_path) as conn:
+        frame.to_sql("uploaded_data", conn, index=False, if_exists="replace")
+
+    analyst = AgenticCSVAnalyst(db_path, "uploaded_data")
+    tools = {tool.name: tool for tool in analyst._build_tools()}
+    quality = json.loads(tools["inspect_data_quality"].invoke({}))
+
+    assert quality["duplicate_row_count"] == 1
+    assert "sales" in quality["columns_with_missing_values"]
+    assert quality["row_count"] == 3
