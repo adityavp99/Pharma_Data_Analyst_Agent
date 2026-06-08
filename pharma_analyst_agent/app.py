@@ -157,6 +157,7 @@ with st.sidebar:
     st.write(f"LLM provider: `{LLM_PROVIDER}`")
     st.write("Architecture: `LangChain create_agent`")
     st.write("Mode: CSV-backed local SQLite")
+    st.caption("Large CSV uploads are loaded into SQLite in chunks and reused during the chat session.")
 
 uploaded_csv = st.file_uploader("Upload CSV", type=["csv"])
 if uploaded_csv is None:
@@ -183,8 +184,24 @@ with st.sidebar:
 
 table_name = safe_table_name(uploaded_csv.name)
 uploaded_db_path = PROCESSED_DATA_DIR / "agentic_uploaded_runtime.db"
-uploaded_csv.seek(0)
-uploaded_info = load_csv_to_sqlite(uploaded_csv, uploaded_db_path, table_name=table_name)
+uploaded_size = getattr(uploaded_csv, "size", None)
+csv_source_signature = f"{uploaded_csv.name}:{uploaded_size}:{table_name}"
+needs_csv_reload = (
+    st.session_state.get("loaded_csv_source_signature") != csv_source_signature
+    or st.session_state.get("loaded_csv_table_name") != table_name
+    or not uploaded_db_path.exists()
+)
+
+if needs_csv_reload:
+    uploaded_csv.seek(0)
+    with st.spinner("Loading CSV into local SQLite. Large files can take a few minutes..."):
+        uploaded_info = load_csv_to_sqlite(uploaded_csv, uploaded_db_path, table_name=table_name)
+    st.session_state.loaded_csv_source_signature = csv_source_signature
+    st.session_state.loaded_csv_table_name = table_name
+    st.session_state.loaded_csv_info = uploaded_info
+else:
+    uploaded_info = st.session_state.loaded_csv_info
+
 file_signature = f"{uploaded_csv.name}:{uploaded_info['rows']}:{','.join(uploaded_info['columns'])}"
 dml_context: dict[str, Any] | None = None
 if uploaded_sql is not None:

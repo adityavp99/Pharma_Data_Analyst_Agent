@@ -173,6 +173,55 @@ The easier production path is to provide metadata in this order:
 4. Screenshot only as visual guidance.
 5. Later, replace manual uploads with automated metadata extraction from Tableau/datamart/catalog APIs.
 
+## Large CSV Uploads
+
+Streamlit normally limits uploaded files to 200 MB. This repo now includes `.streamlit/config.toml` with:
+
+```toml
+[server]
+maxUploadSize = 1024
+```
+
+That raises the upload limit to 1 GB for local testing.
+
+`tools/csv_tool.py` also loads CSVs into SQLite in chunks instead of reading the entire file into one pandas DataFrame. This is important for files with 1M+ rows or 500 MB+ size.
+
+What this improves:
+
+- The browser/server can accept larger CSV files.
+- The app avoids one giant in-memory pandas load during import.
+- The SQLite table is reused during the chat session instead of being reloaded on every Streamlit rerun.
+- The agent can query and aggregate the large file through SQL.
+
+What this does not solve yet:
+
+- Very large files can still take several minutes to upload and import.
+- Local disk speed and available RAM still matter.
+- The LLM should never receive all raw rows. It should inspect schema/sample rows and run SQL aggregations.
+- For production datamarts, uploading 500 MB CSVs is a testing bridge, not the final architecture. A direct database connector or governed extract service is better.
+
+Recommended first tests for a large file:
+
+```text
+What kind of data does this file contain? Show me the row count, columns, likely date columns, likely dimensions, and likely measures.
+```
+
+```text
+Inspect the data quality. Which columns have missing values, high cardinality, or look like IDs?
+```
+
+```text
+Using the uploaded DML context, identify which columns are likely used for the MAT/MQT KPI logic.
+```
+
+Then ask for one chart at a time:
+
+```text
+Using the uploaded DML and screenshot as guidance, recreate the main monthly trend chart as closely as possible. First explain the inferred filters, x-axis, y-axis, grouping, and aggregation, then generate the chart.
+```
+
+For a 500 MB+ CSV, avoid broad requests like "recreate the whole dashboard" in one turn. Ask for one KPI card, one trend, or one comparison at a time.
+
 ## Recursion Limit And Error Diagnostics
 
 LangChain `create_agent` runs as a graph-style loop. Each model step and tool call consumes part of the recursion budget. If the agent keeps calling tools and never produces a final answer, LangGraph raises a recursion-limit error.

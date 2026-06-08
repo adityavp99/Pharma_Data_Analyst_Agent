@@ -26,3 +26,14 @@ def test_load_csv_to_sqlite(tmp_path: Path) -> None:
     with sqlite3.connect(db_path) as conn:
         count = conn.execute("SELECT COUNT(*) FROM sales").fetchone()[0]
     assert count == 2
+
+
+def test_load_csv_to_sqlite_uses_chunks(tmp_path: Path) -> None:
+    csv = BytesIO(b"month,sales\n2025-01,10\n2025-02,20\n2025-03,30\n")
+    db_path = tmp_path / "uploaded.db"
+    result = load_csv_to_sqlite(csv, db_path, "sales", chunk_size=1)
+    assert result["rows"] == 3
+    assert result["sample_rows"] == [{"month": "2025-01", "sales": 10}]
+    with sqlite3.connect(db_path) as conn:
+        total = conn.execute("SELECT SUM(sales) FROM sales").fetchone()[0]
+    assert total == 60
