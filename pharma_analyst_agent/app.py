@@ -181,6 +181,25 @@ with st.sidebar:
         placeholder="Example: Default filters are country=US, channel=Retail, time grain=month...",
         height=100,
     )
+    chart_replication_notes = st.text_area(
+        "Manual chart replication context",
+        placeholder=(
+            "Optional but useful when the screenshot is ambiguous.\n"
+            "Example:\n"
+            "Timeperiod = MTH\n"
+            "geography_lvl1 = Australia\n"
+            "brandgroup = overall / no filter\n"
+            "TA = overall / no filter\n"
+            "DA = overall / no filter\n"
+            "x-axis = year_month\n"
+            "y-axis = sales_value"
+        ),
+        height=170,
+        help=(
+            "Use this to state selected Tableau/frontend filters and chart fields. "
+            "The agent should treat this as stronger evidence than screenshot inference."
+        ),
+    )
 
 table_name = safe_table_name(uploaded_csv.name)
 uploaded_db_path = PROCESSED_DATA_DIR / "agentic_uploaded_runtime.db"
@@ -221,6 +240,8 @@ if uploaded_chart_image is not None:
 
 if dashboard_notes:
     file_signature += f":notes:{hash(dashboard_notes)}"
+if chart_replication_notes:
+    file_signature += f":chart_notes:{hash(chart_replication_notes)}"
 
 if st.session_state.get("active_file_signature") != file_signature:
     st.session_state.active_file_signature = file_signature
@@ -292,7 +313,10 @@ if prompt:
                     uploaded_db_path,
                     table_name,
                     business_context=dml_context,
-                    dashboard_context=dashboard_notes,
+                    dashboard_context=(
+                        f"Dashboard/filter notes:\n{dashboard_notes or 'None provided.'}\n\n"
+                        f"Manual chart replication context:\n{chart_replication_notes or 'None provided.'}"
+                    ),
                 )
                 result = analyst.run(prompt, chat_history=history_for_agent, visual_context=visual_context)
             except LangChainAgentError as exc:

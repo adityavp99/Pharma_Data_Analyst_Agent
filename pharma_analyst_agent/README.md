@@ -2,7 +2,7 @@
 
 Local proof-of-concept for a generalized data analyst agent that can reason over an uploaded CSV, decide which tools to use, run multi-step analysis, answer follow-up questions, and produce answer/table/chart outputs.
 
-The workspace has been cleaned around the LangChain agentic CSV lab. The old synthetic pharma dataset generator, semantic layer, deterministic router, one-shot planner, and metric templates have been removed to avoid confusion.
+Historical notes are archived under [`docs/archive`](docs/archive). The root README describes only the active LangChain agentic CSV application.
 
 ## What The Active App Does
 
@@ -14,8 +14,6 @@ The workspace has been cleaned around the LangChain agentic CSV lab. The old syn
 - Give the agent tools for dataset inspection, SQL querying, pandas analysis, chart option inspection, and chart proposal/validation.
 - Render the final answer, latest SQL result, Python result, chart, and agent tool trace.
 - Preserve chat history so users can ask follow-up questions.
-
-The backend no longer decides "SQL only" or "Python needed" through a deterministic router. The LLM decides which tool to call next based on observations from previous tool calls.
 
 ## Quick Start Guide
 
@@ -88,7 +86,19 @@ pytest
 7. Streamlit validates the final chart spec again before rendering it with Plotly.
 8. Streamlit renders the result and tool trace.
 
-For a detailed explanation of this pivot, see [`docs/langchain_agentic_pivot.md`](docs/langchain_agentic_pivot.md).
+## Current Context/Semantic Layer
+
+The current app uses a lightweight context layer that gives the agent business meaning without hardcoding every metric.
+
+The context layer currently comes from:
+
+- **Uploaded CSV schema:** table name, columns, row count, sample rows, column profiles, likely dimensions, likely measures, and likely time columns.
+- **Uploaded DML/SQL file:** parsed as metadata only. It extracts tables/views, CTE names, calculated aliases, `WHERE` filters, and metric snippets such as MAT, MQT, YTD, QTD, MTD, TRx, NRx, and NBRx.
+- **Manual dashboard/filter notes:** user-provided notes such as `Timeperiod=MTH`, `geography_lvl1=Australia`, or `brandgroup=overall/no filter`.
+- **Screenshot visual context:** optional image context for models that support vision.
+- **Tool outputs:** SQL results, data quality summaries, chart options, and chart validation feedback.
+
+This is a practical MVP semantic layer. It is not yet a production metric registry. Production should add governed metric definitions, dashboard metadata extraction, data catalog integration, and possibly vector retrieval over business documentation.
 
 ## What Is Good Right Now
 
@@ -123,19 +133,74 @@ For a detailed explanation of this pivot, see [`docs/langchain_agentic_pivot.md`
 
 ## Core Functions We Wrote
 
-These are the main pieces of code owned by this project:
+These are the main pieces of code owned by this project. They are functions/classes we wrote ourselves, even though they call LangChain, pandas, SQLite, Plotly, and Streamlit internally.
 
-- `app.py`: Streamlit CSV upload, chat UI, result tabs, chart rendering, and session state.
-- `langchain_agentic/agent.py`: `AgenticCSVAnalyst`, system prompt, LangChain `create_agent` call, and tool definitions.
-- `langchain_agentic/llm_factory.py`: provider selection for Azure OpenAI, OpenAI, and OpenRouter.
-- `langchain_agentic/charting.py`: chart column role detection, chart validation, compact `YYYYMM` date handling, and Plotly figure creation.
-- `langchain_agentic/guardrails.py`: request guardrails and Python AST/code guardrails.
-- `langchain_agentic/metadata_context.py`: DML/SQL context parser for tables, CTEs, calculated aliases, metric snippets, and filters.
-- `tools/csv_tool.py`: CSV-to-SQLite loading and safe table naming.
-- `tools/sql_tool.py`: read-only SQL validation and execution.
-- `tools/schema_tool.py`: SQLite schema, row count, and table preview helpers.
+- `app.py`
+  - `render_agent_chart`
+  - `render_trace`
+  - `render_result_details`
+  - Streamlit upload/chat/session orchestration
+- `langchain_agentic/agent.py`
+  - `AgenticCSVAnalyst`
+  - `_build_tools`
+  - `run`
+  - `_profile_frame`
+  - `_data_quality_summary`
+  - `_diagnostic_result`
+  - tool wrappers: `inspect_dataset`, `inspect_business_context`, `inspect_data_quality`, `query_dataset_sql`, `run_python_analysis`, `inspect_chart_options`, `propose_chart`
+- `langchain_agentic/llm_factory.py`
+  - provider selection for Azure OpenAI, OpenAI, and OpenRouter
+- `langchain_agentic/charting.py`
+  - `infer_column_role`
+  - `convert_temporal_series`
+  - `summarize_chart_options`
+  - `validate_chart_plan`
+  - `build_plotly_chart`
+- `langchain_agentic/guardrails.py`
+  - `check_user_request`
+  - `validate_python_analysis_code`
+- `langchain_agentic/metadata_context.py`
+  - `summarize_sql_context`
+  - SQL/DML parsing helpers for tables, CTEs, calculated aliases, metric snippets, and filters
+- `tools/csv_tool.py`
+  - `safe_table_name`
+  - `load_csv_to_sqlite`
+- `tools/sql_tool.py`
+  - `validate_sql`
+  - `maybe_add_limit`
+  - `run_readonly_sql`
+- `tools/schema_tool.py`
+  - `get_schema`
+  - `describe_table`
+  - `get_table_row_counts`
+  - `get_schema_text`
 
-LangChain provides the agent runtime through `create_agent`. The LLM provider supplies the model. Everything above is the local orchestration, tool, UI, validation, and guardrail layer we wrote ourselves.
+## Library Functions We Call
+
+These are not functions we wrote. They are important library/runtime capabilities that our code calls.
+
+- **LangChain / LangGraph**
+  - `langchain.agents.create_agent`: creates the agent loop.
+  - `langchain_core.tools.tool`: turns Python functions into callable agent tools.
+  - `agent.invoke`: runs the agent reasoning/tool-call loop.
+  - `GraphRecursionError`: raised when the agent uses all allowed reasoning/tool-call steps.
+- **LLM provider wrappers**
+  - Azure/OpenAI/OpenRouter chat model classes are used by `llm_factory.py`.
+  - The model decides which tool to call next and writes SQL/Python/chart plans.
+- **pandas**
+  - `pd.read_csv(..., chunksize=...)`: streams large CSV files in chunks.
+  - DataFrame profiling, type conversion, and local analysis.
+  - `DataFrame.to_sql`: writes chunks into SQLite.
+- **SQLite / sqlite3**
+  - stores uploaded CSV data as a local SQL table.
+  - executes read-only analytical SQL.
+- **sqlparse**
+  - parses and validates SQL shape.
+  - helps split statements and strip comments.
+- **Plotly Express**
+  - renders validated chart plans into interactive charts.
+- **Streamlit**
+  - file upload, sidebar controls, chat UI, tabs, dataframes, and chart display.
 
 ## DML And Tableau Context Workflow
 
@@ -173,6 +238,24 @@ The easier production path is to provide metadata in this order:
 4. Screenshot only as visual guidance.
 5. Later, replace manual uploads with automated metadata extraction from Tableau/datamart/catalog APIs.
 
+The UI now also has a **Manual chart replication context** box. Use this when the screenshot is ambiguous or when the filter state is not visually obvious.
+
+Example:
+
+```text
+Timeperiod = MTH
+geography_lvl1 = Australia
+brandgroup = overall / no filter
+TA = overall / no filter
+DA = overall / no filter
+x-axis = year_month
+y-axis = sales_value
+chart type = line
+color = use Tableau-like blue/orange series colors if grouping is present
+```
+
+The agent prompt treats these manual notes as stronger evidence than screenshot inference. If you say `brandgroup=overall/no filter`, the agent should not randomly select a brand group from the CSV.
+
 ## Large CSV Uploads
 
 Streamlit normally limits uploaded files to 200 MB. This repo now includes `.streamlit/config.toml` with:
@@ -185,6 +268,23 @@ maxUploadSize = 1024
 That raises the upload limit to 1 GB for local testing.
 
 `tools/csv_tool.py` also loads CSVs into SQLite in chunks instead of reading the entire file into one pandas DataFrame. This is important for files with 1M+ rows or 500 MB+ size.
+
+The chunking method is pandas streaming chunking:
+
+```python
+pd.read_csv(file_obj, chunksize=100_000, low_memory=False)
+```
+
+That returns one DataFrame chunk at a time. The first chunk creates/replaces the SQLite table. Later chunks append to the same table.
+
+Why this chunking approach was chosen:
+
+- It is simple and already supported by pandas.
+- It avoids holding the entire CSV in memory during import.
+- It works with the current SQLite-backed MVP.
+- It keeps the rest of the app unchanged because the agent still queries one SQLite table.
+
+This is row-based chunking for ingestion, not LLM context chunking. The LLM does not read every chunk. The large CSV becomes a SQLite table, then the agent uses SQL to inspect and aggregate it.
 
 What this improves:
 
@@ -221,6 +321,46 @@ Using the uploaded DML and screenshot as guidance, recreate the main monthly tre
 ```
 
 For a 500 MB+ CSV, avoid broad requests like "recreate the whole dashboard" in one turn. Ask for one KPI card, one trend, or one comparison at a time.
+
+## Why Desired Charts Can Still Be Wrong
+
+The current chart flow is useful, but it is not yet Tableau-grade.
+
+What works:
+
+- The model can infer common chart types such as line, bar, scatter, and area.
+- The model can inspect chartable columns before proposing a chart.
+- The app validates that x/y/group columns exist.
+- The app blocks obvious mistakes such as using `year_month` as a y-axis measure.
+- Compact dates like `202506` are treated as time dimensions.
+- Plotly renders the final validated chart.
+
+Why it can still fail:
+
+- A screenshot does not always expose all active filters.
+- The model may over-infer filters from visible labels or random column values.
+- Tableau may use hidden calculated fields, parameters, LOD expressions, or table calculations that are not present in the CSV.
+- The uploaded CSV may be at a different grain than the Tableau chart.
+- The chart may require one or more frontend filters that are not visible in the screenshot.
+- The Python tool has guardrails and can reject model-generated code as "too complex" if the code is too long or has too many AST nodes.
+- LangChain provides the agent loop, but it does not guarantee correct business semantics. The model still needs metadata and validation.
+
+How to get better results now:
+
+- Provide manual chart context for filters and axes.
+- Ask for one chart at a time.
+- Tell the agent which column is the time field and which column is the measure.
+- State filters explicitly, especially when they are "overall/no filter."
+- Ask the agent to explain inferred filters before rendering.
+- Prefer SQL aggregation for simple dashboard charts.
+
+Example prompt:
+
+```text
+Using the CSV, uploaded DML, screenshot, and manual chart context, recreate the simple Australia monthly line chart.
+Use Timeperiod=MTH, geography_lvl1=Australia, no brandgroup filter, no TA filter, and no DA filter.
+First state the inferred chart spec and filters. Then run SQL to aggregate to monthly grain and render the line chart.
+```
 
 ## Recursion Limit And Error Diagnostics
 

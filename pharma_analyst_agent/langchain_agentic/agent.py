@@ -39,6 +39,8 @@ Operating rules:
   Do not sum, average, or use time dimensions as y-axis measures.
 - Use Python when the task needs statistical analysis, custom calculations, correlation, trend logic,
   reshaping, or dataframe exploration that is awkward in SQL.
+- For simple chart replication, prefer SQL aggregation plus propose_chart. Do not use Python unless SQL cannot
+  express the needed calculation or reshape.
 - If the user asks what the CSV contains, inspect the dataset and summarize columns, row count,
   sample values, likely meaning, and good follow-up question ideas.
 - If the user provides DML/SQL/dashboard context or asks about business definitions, MQT, MAT, filters,
@@ -57,6 +59,13 @@ Operating rules:
 - Use uploaded DML/SQL only as metadata/business logic context. Do not execute the uploaded DML directly.
 - When replicating a Tableau chart from a screenshot, infer the chart type, axes, grouping, filters,
   and calculations from the screenshot and uploaded business context, then validate against available data.
+- Manual dashboard/filter/chart notes are stronger evidence than screenshot inference. If the user states
+  geography_lvl1=Australia, Timeperiod=MTH, brandgroup=overall/no filter, TA=overall/no filter, or DA=overall/no filter,
+  apply exactly that and do not add brand, therapeutic area, disease area, or product filters unless explicitly selected.
+- Do not infer filters merely because categorical values exist in the uploaded CSV. Only apply filters supported by
+  the user question, manual chart context, uploaded DML/dashboard context, or clearly visible screenshot selections.
+- Before rendering a replicated dashboard chart, explain the inferred x-axis, y-axis, aggregation, time grain, color/grouping,
+  and filters. If any part is uncertain, state the assumption instead of inventing a specific filter.
 - Keep answers business-friendly and concise, but include enough evidence to be trusted.
 - For generated charts, explain why that chart type and axis choice make sense.
 - This is a local prototype. Do not provide medical, legal, regulatory, or treatment advice.
@@ -558,7 +567,10 @@ class AgenticCSVAnalyst:
                                 f"{question}\n\n"
                                 "A Tableau/dashboard chart screenshot is attached. Use it as visual context to infer "
                                 "chart type, axes, grouping, filters, labels, and layout. Validate any inferred columns "
-                                "or metrics against the uploaded CSV and business context before answering."
+                                "or metrics against the uploaded CSV and business context before answering. Manual "
+                                "dashboard/filter/chart notes are stronger evidence than the screenshot. Do not invent "
+                                "brand, TA, DA, geography, or product filters from random CSV values if they are not "
+                                "explicitly selected in the user question, manual notes, DML context, or screenshot."
                             ),
                         },
                         {
