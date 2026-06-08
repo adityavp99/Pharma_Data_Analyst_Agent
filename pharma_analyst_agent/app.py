@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+import base64
 import sqlite3
 import sys
 
@@ -15,6 +16,7 @@ if str(ROOT) not in sys.path:
 from config import LLM_PROVIDER, PROCESSED_DATA_DIR
 from langchain_agentic import AgenticCSVAnalyst, LangChainAgentError
 from langchain_agentic.charting import build_plotly_chart, validate_chart_plan
+from langchain_agentic.metadata_context import summarize_sql_context
 from tools.csv_tool import load_csv_to_sqlite, safe_table_name
 from tools.schema_tool import get_table_row_counts
 
@@ -161,11 +163,47 @@ if uploaded_csv is None:
     st.info("Upload a CSV file to start the agentic workflow.")
     st.stop()
 
+with st.sidebar:
+    st.subheader("Optional Context")
+    uploaded_sql = st.file_uploader(
+        "Upload DML/SQL context",
+        type=["sql", "txt"],
+        help="Use this for MQT/MAT definitions, Tableau source SQL, calculated fields, and dashboard filters.",
+    )
+    uploaded_chart_image = st.file_uploader(
+        "Upload Tableau/chart screenshot",
+        type=["png", "jpg", "jpeg"],
+        help="Works only if your configured model supports image input.",
+    )
+    dashboard_notes = st.text_area(
+        "Dashboard/filter notes",
+        placeholder="Example: Default filters are country=US, channel=Retail, time grain=month...",
+        height=100,
+    )
+
 table_name = safe_table_name(uploaded_csv.name)
 uploaded_db_path = PROCESSED_DATA_DIR / "agentic_uploaded_runtime.db"
 uploaded_csv.seek(0)
 uploaded_info = load_csv_to_sqlite(uploaded_csv, uploaded_db_path, table_name=table_name)
 file_signature = f"{uploaded_csv.name}:{uploaded_info['rows']}:{','.join(uploaded_info['columns'])}"
+dml_context: dict[str, Any] | None = None
+if uploaded_sql is not None:
+    sql_text = uploaded_sql.getvalue().decode("utf-8", errors="replace")
+    dml_context = summarize_sql_context(sql_text, source_name=uploaded_sql.name)
+    file_signature += f":sql:{uploaded_sql.name}:{len(sql_text)}"
+
+visual_context = None
+if uploaded_chart_image is not None:
+    image_bytes = uploaded_chart_image.getvalue()
+    visual_context = {
+        "mime_type": uploaded_chart_image.type or "image/png",
+        "image_bytes_b64": base64.b64encode(image_bytes).decode("utf-8"),
+        "file_name": uploaded_chart_image.name,
+    }
+    file_signature += f":image:{uploaded_chart_image.name}:{len(image_bytes)}"
+
+if dashboard_notes:
+    file_signature += f":notes:{hash(dashboard_notes)}"
 
 if st.session_state.get("active_file_signature") != file_signature:
     st.session_state.active_file_signature = file_signature
@@ -187,6 +225,16 @@ with st.sidebar:
     st.subheader("Tables")
     counts = get_table_row_counts(uploaded_db_path)
     st.dataframe(pd.DataFrame([{"table": key, "rows": value} for key, value in counts.items()]), hide_index=True)
+    if dml_context:
+        with st.expander("DML/SQL context summary", expanded=False):
+            st.write("Tables/views referenced")
+            st.write(dml_context.get("tables_or_views_referenced", []))
+            st.write("Calculated fields / aliases")
+            st.json(dml_context.get("calculated_fields_or_aliases", [])[:10])
+            st.write("Metric snippets")
+            st.json(dml_context.get("metric_term_snippets", [])[:10])
+    if uploaded_chart_image is not None:
+        st.caption(f"Screenshot attached: `{uploaded_chart_image.name}`")
     if st.button("Clear chat"):
         st.session_state.chat_messages = []
         st.rerun()
@@ -223,8 +271,13 @@ if prompt:
     with st.chat_message("assistant"):
         with st.spinner("The agent is reasoning and calling tools..."):
             try:
-                analyst = AgenticCSVAnalyst(uploaded_db_path, table_name)
-                result = analyst.run(prompt, chat_history=history_for_agent)
+                analyst = AgenticCSVAnalyst(
+                    uploaded_db_path,
+                    table_name,
+                    business_context=dml_context,
+                    dashboard_context=dashboard_notes,
+                )
+                result = analyst.run(prompt, chat_history=history_for_agent, visual_context=visual_context)
             except LangChainAgentError as exc:
                 st.error(str(exc))
                 st.session_state.chat_messages.append({"role": "assistant", "content": str(exc)})

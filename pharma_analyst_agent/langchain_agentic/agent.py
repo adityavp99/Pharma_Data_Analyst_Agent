@@ -41,6 +41,8 @@ Operating rules:
   reshaping, or dataframe exploration that is awkward in SQL.
 - If the user asks what the CSV contains, inspect the dataset and summarize columns, row count,
   sample values, likely meaning, and good follow-up question ideas.
+- If the user provides DML/SQL/dashboard context or asks about business definitions, MQT, MAT, filters,
+  Tableau replication, or calculated fields, call inspect_business_context before writing SQL or charts.
 - If the user asks about data trust, quality, missingness, duplicates, or cleaning, call inspect_data_quality.
 - If a visual would help, use inspect_chart_options first, then call propose_chart with columns that exist
   in the latest SQL result or uploaded dataframe.
@@ -52,6 +54,9 @@ Operating rules:
   with the best available evidence plus the limitation.
 - Prefer charting aggregated result data over raw uploaded data when the raw data is too granular.
 - If the data is insufficient, say what is missing.
+- Use uploaded DML/SQL only as metadata/business logic context. Do not execute the uploaded DML directly.
+- When replicating a Tableau chart from a screenshot, infer the chart type, axes, grouping, filters,
+  and calculations from the screenshot and uploaded business context, then validate against available data.
 - Keep answers business-friendly and concise, but include enough evidence to be trusted.
 - For generated charts, explain why that chart type and axis choice make sense.
 - This is a local prototype. Do not provide medical, legal, regulatory, or treatment advice.
@@ -267,10 +272,18 @@ def _diagnostic_result(
 
 
 class AgenticCSVAnalyst:
-    def __init__(self, db_path: str | Path, table_name: str):
+    def __init__(
+        self,
+        db_path: str | Path,
+        table_name: str,
+        business_context: dict[str, Any] | None = None,
+        dashboard_context: str = "",
+    ):
         self.db_path = Path(db_path)
         self.table_name = table_name
         self.frame = _read_table(self.db_path, self.table_name)
+        self.business_context = business_context or {}
+        self.dashboard_context = dashboard_context
         self.state: dict[str, Any] = {
             "sql_queries": [],
             "python_runs": [],
@@ -294,6 +307,8 @@ class AgenticCSVAnalyst:
         table_name = self.table_name
         frame = self.frame
         state = self.state
+        business_context = self.business_context
+        dashboard_context = self.dashboard_context
 
         @tool
         def inspect_dataset() -> str:
@@ -308,6 +323,23 @@ class AgenticCSVAnalyst:
                     "sample_rows": details["sample_rows"],
                     "profile": _profile_frame(frame),
                     "chart_options": summarize_chart_options(frame),
+                }
+            )
+
+        @tool
+        def inspect_business_context() -> str:
+            """Inspect uploaded DML/SQL metadata, KPI definitions, calculated fields, filters, and dashboard notes."""
+            _record_tool_event(state, "inspect_business_context", "success")
+            return _safe_json(
+                {
+                    "dml_or_sql_context": business_context,
+                    "dashboard_or_filter_notes": dashboard_context,
+                    "usage_guidance": [
+                        "Use this context to map business terms to CSV columns.",
+                        "Use calculated aliases and metric snippets to infer MQT, MAT, KPI, or Tableau-like logic.",
+                        "Use filter clauses and dashboard notes as candidate filters, but validate against uploaded CSV columns.",
+                        "Do not execute raw DML. Generate read-only analysis SQL against the uploaded CSV SQLite table.",
+                    ],
                 }
             )
 
@@ -466,6 +498,7 @@ class AgenticCSVAnalyst:
 
         return [
             inspect_dataset,
+            inspect_business_context,
             inspect_data_quality,
             query_dataset_sql,
             run_python_analysis,
@@ -473,7 +506,12 @@ class AgenticCSVAnalyst:
             propose_chart,
         ]
 
-    def run(self, question: str, chat_history: list[dict[str, str]] | None = None) -> dict[str, Any]:
+    def run(
+        self,
+        question: str,
+        chat_history: list[dict[str, str]] | None = None,
+        visual_context: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         try:
             from langchain.agents import create_agent
         except ImportError as exc:
@@ -508,7 +546,32 @@ class AgenticCSVAnalyst:
             for message in (chat_history or [])[-8:]
             if message.get("role") in {"user", "assistant"} and message.get("content")
         ]
-        messages.append({"role": "user", "content": question})
+        if visual_context and visual_context.get("image_bytes_b64"):
+            mime_type = visual_context.get("mime_type", "image/png")
+            messages.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                f"{question}\n\n"
+                                "A Tableau/dashboard chart screenshot is attached. Use it as visual context to infer "
+                                "chart type, axes, grouping, filters, labels, and layout. Validate any inferred columns "
+                                "or metrics against the uploaded CSV and business context before answering."
+                            ),
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{mime_type};base64,{visual_context['image_bytes_b64']}"
+                            },
+                        },
+                    ],
+                }
+            )
+        else:
+            messages.append({"role": "user", "content": question})
         try:
             response = agent.invoke(
                 {"messages": messages},

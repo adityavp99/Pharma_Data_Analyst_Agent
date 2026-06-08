@@ -7,6 +7,8 @@ The workspace has been cleaned around the LangChain agentic CSV lab. The old syn
 ## What The Active App Does
 
 - Upload a CSV.
+- Optionally upload DML/SQL context that contains source logic, calculated fields, MQT/MAT-style formulas, and filters.
+- Optionally upload a Tableau/chart screenshot as visual context when the configured model supports image input.
 - Store it as a temporary local SQLite table.
 - Let a LangChain `create_agent` loop decide what to do.
 - Give the agent tools for dataset inspection, SQL querying, pandas analysis, chart option inspection, and chart proposal/validation.
@@ -76,6 +78,7 @@ pytest
 4. `langchain_agentic/agent.py` creates a LangChain agent with tools.
 5. The agent decides whether to call:
    - `inspect_dataset`
+   - `inspect_business_context`
    - `inspect_data_quality`
    - `query_dataset_sql`
    - `run_python_analysis`
@@ -96,6 +99,7 @@ For a detailed explanation of this pivot, see [`docs/langchain_agentic_pivot.md`
 - User request guardrails refuse unsafe requests such as credential extraction, medical advice, prompt extraction, and bulk data dumping.
 - Python code guardrails block imports, file/database reads and writes, unsafe builtins, and overly complex snippets.
 - The agent can inspect data quality: missing values, duplicate rows, likely key columns, cardinality, and numeric ranges.
+- The agent can inspect uploaded DML/SQL business context, including table references, calculated aliases, filters, and MQT/MAT-like snippets.
 - Chart proposals are now validated before rendering.
 - Plotly charts are more interactive than the previous basic Altair charts.
 - Compact period columns such as `202506` are treated as year-month time dimensions, not numeric measures.
@@ -111,6 +115,7 @@ For a detailed explanation of this pivot, see [`docs/langchain_agentic_pivot.md`
 - **Context management:** the agent only sees recent chat turns and tool outputs. For many tables, we will need schema retrieval, table selection, and possibly a metadata/vector layer.
 - **Chart sophistication:** chart specs are validated now, but dashboard-level layout, KPI cards, advanced formatting, and Tableau-like replication still need dedicated tools.
 - **Column semantics:** obvious date patterns such as `YYYYMM`, `YYYY`, and date strings are detected, but business-specific metric definitions still need metadata/datamart context.
+- **Tableau replication:** uploaded DML and screenshots provide useful context, but exact Tableau parity still needs Tableau calculated-field extraction, dashboard filter metadata, and visual validation.
 - **Reliability evaluation:** we need a test set of realistic business questions with expected SQL/outputs.
 - **Human approval:** there is no approval checkpoint before expensive queries or report publishing.
 - **Observability:** we show a local trace, but production needs logs, cost tracking, latency, and failure categorization.
@@ -125,11 +130,48 @@ These are the main pieces of code owned by this project:
 - `langchain_agentic/llm_factory.py`: provider selection for Azure OpenAI, OpenAI, and OpenRouter.
 - `langchain_agentic/charting.py`: chart column role detection, chart validation, compact `YYYYMM` date handling, and Plotly figure creation.
 - `langchain_agentic/guardrails.py`: request guardrails and Python AST/code guardrails.
+- `langchain_agentic/metadata_context.py`: DML/SQL context parser for tables, CTEs, calculated aliases, metric snippets, and filters.
 - `tools/csv_tool.py`: CSV-to-SQLite loading and safe table naming.
 - `tools/sql_tool.py`: read-only SQL validation and execution.
 - `tools/schema_tool.py`: SQLite schema, row count, and table preview helpers.
 
 LangChain provides the agent runtime through `create_agent`. The LLM provider supplies the model. Everything above is the local orchestration, tool, UI, validation, and guardrail layer we wrote ourselves.
+
+## DML And Tableau Context Workflow
+
+You can now upload an optional `.sql` or `.txt` file containing DML/source SQL. The app parses it as context only; it does not execute it.
+
+The parser extracts:
+
+- referenced tables/views
+- CTE names
+- calculated fields and aliases
+- `WHERE` filters
+- metric snippets involving terms like `MAT`, `MQT`, `YTD`, `QTD`, `MTD`, `TRx`, `NRx`, and `NBRx`
+- a raw SQL excerpt for additional context
+
+The agent gets this through the `inspect_business_context` tool. It should use the context to understand how columns and metrics are used, then generate read-only analysis SQL against the uploaded CSV table.
+
+You can also upload a Tableau/chart screenshot. If your configured Azure/OpenAI model supports image input, the screenshot is passed to the agent as visual context. The agent can use it to infer chart type, axes, groupings, labels, and likely filters, then validate those choices against the CSV and DML context.
+
+This is the right direction, but it is still an approximation. Exact Tableau replication usually needs more than a screenshot:
+
+- Tableau calculated fields
+- dashboard filter settings
+- parameter values
+- LOD expressions
+- table calculations
+- worksheet shelf configuration
+- data source relationships/joins
+- default date grains and sort orders
+
+The easier production path is to provide metadata in this order:
+
+1. CSV/datamart extract for the actual data.
+2. DML/source SQL for metric and filter logic.
+3. A short dashboard/filter note explaining default filters and front-end selections.
+4. Screenshot only as visual guidance.
+5. Later, replace manual uploads with automated metadata extraction from Tableau/datamart/catalog APIs.
 
 ## Recursion Limit And Error Diagnostics
 

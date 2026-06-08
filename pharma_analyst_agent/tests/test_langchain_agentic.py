@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
 from langchain_agentic import AgenticCSVAnalyst
 from langchain_agentic.agent import _diagnostic_result
 from langchain_agentic.charting import prepare_chart_frame, summarize_chart_options, validate_chart_plan
+from langchain_agentic.metadata_context import summarize_sql_context
 
 
 def _make_db(tmp_path: Path) -> Path:
@@ -190,6 +191,44 @@ def test_tool_events_are_recorded_for_diagnostics(tmp_path: Path) -> None:
     events = analyst.state["tool_events"]
     assert any(event["tool"] == "query_dataset_sql" and event["status"] == "started" for event in events)
     assert any(event["tool"] == "query_dataset_sql" and event["status"] == "success" for event in events)
+
+
+def test_sql_context_parser_extracts_tables_metrics_and_filters() -> None:
+    sql = """
+    CREATE TABLE dashboard_sales AS
+    SELECT
+      product_name,
+      country,
+      SUM(CASE WHEN period_rank <= 12 THEN trx ELSE 0 END) AS mat_trx,
+      SUM(CASE WHEN period_rank <= 3 THEN trx ELSE 0 END) AS mqt_trx
+    FROM commercial.sales_mart
+    WHERE country = 'US' AND channel = 'Retail'
+    GROUP BY product_name, country;
+    """
+
+    context = summarize_sql_context(sql, source_name="tableau_source.sql")
+
+    assert "commercial.sales_mart" in context["tables_or_views_referenced"]
+    assert any(item["alias"] == "mat_trx" for item in context["calculated_fields_or_aliases"])
+    assert any(item["term"] == "mat" for item in context["metric_term_snippets"])
+    assert any("country" in item.lower() for item in context["filters_or_where_clauses"])
+
+
+def test_business_context_tool_returns_uploaded_dml_context(tmp_path: Path) -> None:
+    context = summarize_sql_context("SELECT SUM(trx) AS mat_trx FROM sales WHERE country = 'US'")
+    analyst = AgenticCSVAnalyst(
+        _make_db(tmp_path),
+        "uploaded_data",
+        business_context=context,
+        dashboard_context="Default front-end filter: country=US",
+    )
+    tools = {tool.name: tool for tool in analyst._build_tools()}
+
+    result = json.loads(tools["inspect_business_context"].invoke({}))
+
+    assert "dml_or_sql_context" in result
+    assert result["dashboard_or_filter_notes"] == "Default front-end filter: country=US"
+    assert any(item["alias"] == "mat_trx" for item in result["dml_or_sql_context"]["calculated_fields_or_aliases"])
 
 
 def test_recursion_diagnostic_result_includes_trace_and_causes(tmp_path: Path) -> None:
