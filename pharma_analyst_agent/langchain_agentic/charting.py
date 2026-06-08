@@ -9,6 +9,15 @@ import plotly.express as px
 SUPPORTED_CHART_TYPES = {"bar", "line", "scatter", "area"}
 
 
+def _y_columns(plan: dict[str, Any]) -> list[str]:
+    y_col = plan.get("y_col")
+    if isinstance(y_col, list):
+        return [str(column) for column in y_col if column]
+    if y_col:
+        return [str(y_col)]
+    return []
+
+
 def _clean_compact_date_strings(series: pd.Series) -> pd.Series:
     return series.dropna().astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
 
@@ -92,6 +101,7 @@ def summarize_chart_options(frame: pd.DataFrame) -> dict[str, Any]:
         "chart_guidance": [
             "Columns with role=datetime are time dimensions. Do not sum or average them as measures.",
             "Use line or area charts for time trends.",
+            "For Tableau-style multi-line KPI charts, either use a long result with columns like period, series, value or a wide result with multiple numeric y columns.",
             "Use bar charts for category comparisons, ideally with 20 or fewer x-axis categories.",
             "Use scatter charts for relationships between two numeric measures.",
             "Use a grouped color only when the grouping column has a small number of categories.",
@@ -105,7 +115,7 @@ def validate_chart_plan(frame: pd.DataFrame, plan: dict[str, Any]) -> dict[str, 
     warnings: list[str] = []
     chart_type = str(plan.get("chart_type", "")).lower()
     x_col = plan.get("x_col")
-    y_col = plan.get("y_col")
+    y_cols = _y_columns(plan)
     group_by = plan.get("group_by")
 
     if frame.empty:
@@ -114,24 +124,34 @@ def validate_chart_plan(frame: pd.DataFrame, plan: dict[str, Any]) -> dict[str, 
         issues.append(f"Unsupported chart_type `{chart_type}`. Use one of {sorted(SUPPORTED_CHART_TYPES)}.")
     if x_col not in frame.columns:
         issues.append(f"x_col `{x_col}` is not present in the chart data.")
-    if y_col not in frame.columns:
-        issues.append(f"y_col `{y_col}` is not present in the chart data.")
+    if not y_cols:
+        issues.append("y_col is required. Use one numeric column or a list of numeric columns.")
+    for y_col in y_cols:
+        if y_col not in frame.columns:
+            issues.append(f"y_col `{y_col}` is not present in the chart data.")
     if group_by and group_by not in frame.columns:
         issues.append(f"group_by `{group_by}` is not present in the chart data.")
+    if group_by and len(y_cols) > 1:
+        warnings.append(
+            "Both multiple y columns and group_by were provided. Prefer either wide multi-y data or long data with one y_col plus group_by."
+        )
     if issues:
         return {"valid": False, "issues": issues, "warnings": warnings, "plan": plan}
 
     x_role = infer_column_role(frame[x_col])
-    y_role = infer_column_role(frame[y_col])
     x_unique = int(frame[x_col].nunique(dropna=True))
 
-    y_numeric = pd.to_numeric(frame[y_col], errors="coerce")
-    if y_role == "datetime":
-        issues.append(
-            f"y_col `{y_col}` looks like a date/time period, so it should be used as an x-axis or grouping dimension, not summed as a measure."
-        )
-    elif y_numeric.notna().mean() < 0.8:
-        issues.append(f"y_col `{y_col}` is not mostly numeric, so it cannot be used as a quantitative y-axis.")
+    y_roles: dict[str, str] = {}
+    for y_col in y_cols:
+        y_role = infer_column_role(frame[y_col])
+        y_roles[y_col] = y_role
+        y_numeric = pd.to_numeric(frame[y_col], errors="coerce")
+        if y_role == "datetime":
+            issues.append(
+                f"y_col `{y_col}` looks like a date/time period, so it should be used as an x-axis or grouping dimension, not summed as a measure."
+            )
+        elif y_numeric.notna().mean() < 0.8:
+            issues.append(f"y_col `{y_col}` is not mostly numeric, so it cannot be used as a quantitative y-axis.")
 
     if chart_type in {"line", "area"} and x_role not in {"datetime", "numeric"}:
         issues.append(
@@ -159,7 +179,7 @@ def validate_chart_plan(frame: pd.DataFrame, plan: dict[str, Any]) -> dict[str, 
         "plan": plan,
         "roles": {
             "x_col": x_role,
-            "y_col": y_role,
+            "y_col": y_roles if len(y_roles) > 1 else next(iter(y_roles.values()), None),
             "group_by": infer_column_role(frame[group_by]) if group_by else None,
         },
     }
@@ -168,11 +188,12 @@ def validate_chart_plan(frame: pd.DataFrame, plan: dict[str, Any]) -> dict[str, 
 def prepare_chart_frame(frame: pd.DataFrame, plan: dict[str, Any]) -> pd.DataFrame:
     prepared = frame.copy()
     x_col = plan["x_col"]
-    y_col = plan["y_col"]
-    prepared[y_col] = pd.to_numeric(prepared[y_col], errors="coerce")
+    y_cols = _y_columns(plan)
+    for y_col in y_cols:
+        prepared[y_col] = pd.to_numeric(prepared[y_col], errors="coerce")
     if _is_datetime_like(prepared[x_col]):
         prepared[x_col] = convert_temporal_series(prepared[x_col])
-    return prepared.dropna(subset=[x_col, y_col])
+    return prepared.dropna(subset=[x_col, *y_cols])
 
 
 def build_plotly_chart(frame: pd.DataFrame, plan: dict[str, Any]):
@@ -181,6 +202,7 @@ def build_plotly_chart(frame: pd.DataFrame, plan: dict[str, Any]):
     y_col = plan["y_col"]
     group_by = plan.get("group_by")
     title = plan.get("title") or "Agent chart"
+    color_map = plan.get("color_map") or None
     prepared = prepare_chart_frame(frame, plan)
 
     common = {
@@ -189,6 +211,7 @@ def build_plotly_chart(frame: pd.DataFrame, plan: dict[str, Any]):
         "y": y_col,
         "color": group_by if group_by in prepared.columns else None,
         "title": title,
+        "color_discrete_map": color_map,
     }
     if chart_type == "line":
         fig = px.line(**common, markers=True)

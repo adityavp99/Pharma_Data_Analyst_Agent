@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
 
 from langchain_agentic import AgenticCSVAnalyst
 from langchain_agentic.agent import _diagnostic_result
-from langchain_agentic.charting import prepare_chart_frame, summarize_chart_options, validate_chart_plan
+from langchain_agentic.charting import build_plotly_chart, prepare_chart_frame, summarize_chart_options, validate_chart_plan
 from langchain_agentic.metadata_context import summarize_sql_context
 
 
@@ -140,6 +140,30 @@ def test_year_month_columns_are_treated_as_time_dimensions() -> None:
     assert str(prepared["year_month"].iloc[0].date()) == "2025-01-01"
 
 
+def test_multi_series_chart_plan_is_supported() -> None:
+    frame = pd.DataFrame(
+        [
+            {"year_month": 202501, "actual": 1000, "target": 900, "previous": 850},
+            {"year_month": 202502, "actual": 1200, "target": 950, "previous": 900},
+        ]
+    )
+
+    plan = {
+        "chart_type": "line",
+        "x_col": "year_month",
+        "y_col": ["actual", "target", "previous"],
+        "group_by": None,
+        "title": "Sales value trend",
+        "data_source": "latest_sql_result",
+        "color_map": {"actual": "#e31a1c", "target": "#000000", "previous": "#d0d0d0"},
+    }
+
+    validation = validate_chart_plan(frame, plan)
+    assert validation["valid"] is True
+    figure = build_plotly_chart(frame, plan)
+    assert len(figure.data) == 3
+
+
 def test_python_guardrail_blocks_file_access(tmp_path: Path) -> None:
     analyst = AgenticCSVAnalyst(_make_db(tmp_path), "uploaded_data")
     tools = {tool.name: tool for tool in analyst._build_tools()}
@@ -180,6 +204,35 @@ def test_data_quality_tool_reports_duplicates_and_possible_keys(tmp_path: Path) 
     assert quality["duplicate_row_count"] == 1
     assert "sales" in quality["columns_with_missing_values"]
     assert quality["row_count"] == 3
+
+
+def test_column_values_tool_validates_requested_filters(tmp_path: Path) -> None:
+    db_path = tmp_path / "filters.db"
+    frame = pd.DataFrame(
+        [
+            {"geography_lvl1": "Australia", "brand": "DARZALEX", "sales": 100},
+            {"geography_lvl1": "Australia", "brand": "OTHER", "sales": 50},
+            {"geography_lvl1": "Japan", "brand": "DARZALEX", "sales": 80},
+        ]
+    )
+    with sqlite3.connect(db_path) as conn:
+        frame.to_sql("uploaded_data", conn, index=False, if_exists="replace")
+
+    analyst = AgenticCSVAnalyst(db_path, "uploaded_data")
+    tools = {tool.name: tool for tool in analyst._build_tools()}
+
+    result = json.loads(
+        tools["inspect_column_values"].invoke(
+            {
+                "column_names": ["geography_lvl1", "brand", "missing_column"],
+                "search_value": "Aus",
+                "max_values_per_column": 10,
+            }
+        )
+    )
+
+    assert result["columns"]["geography_lvl1"]["values"][0]["value"] == "Australia"
+    assert result["columns"]["missing_column"]["error"]
 
 
 def test_tool_events_are_recorded_for_diagnostics(tmp_path: Path) -> None:

@@ -45,9 +45,14 @@ Operating rules:
   sample values, likely meaning, and good follow-up question ideas.
 - If the user provides DML/SQL/dashboard context or asks about business definitions, MQT, MAT, filters,
   Tableau replication, or calculated fields, call inspect_business_context before writing SQL or charts.
+- For dashboard or Tableau-style replication, call inspect_column_values for any requested filter columns before
+  writing final SQL. Confirm that requested values exist and do not substitute random values.
 - If the user asks about data trust, quality, missingness, duplicates, or cleaning, call inspect_data_quality.
 - If a visual would help, use inspect_chart_options first, then call propose_chart with columns that exist
   in the latest SQL result or uploaded dataframe.
+- For multi-series trend charts, prefer one of these two chart data shapes:
+  1. long form: period column, series column, value column, then propose_chart with group_by=series;
+  2. wide form: period column plus multiple numeric y columns, then propose_chart with y_col as a list.
 - If propose_chart returns valid=false, repair the chart choice by aggregating/filtering data or choosing
   more appropriate columns/chart type before answering.
 - Do not loop indefinitely on chart repairs. If a chart still cannot be made after two repair attempts,
@@ -192,6 +197,10 @@ def _frame_from_sql_result(result: dict[str, Any] | None) -> pd.DataFrame | None
     if not result or result.get("error"):
         return None
     return pd.DataFrame(result.get("rows", []), columns=result.get("columns", []))
+
+
+def _quote_identifier(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
 
 
 def _record_tool_event(state: dict[str, Any], tool_name: str, status: str, details: dict[str, Any] | None = None) -> None:
@@ -359,6 +368,48 @@ class AgenticCSVAnalyst:
             return _safe_json(_data_quality_summary(frame))
 
         @tool
+        def inspect_column_values(
+            column_names: list[str],
+            search_value: str | None = None,
+            max_values_per_column: int = 25,
+        ) -> str:
+            """Inspect distinct values and counts for columns, optionally searching for a filter value."""
+            _record_tool_event(
+                state,
+                "inspect_column_values",
+                "started",
+                {"column_names": column_names, "search_value": search_value},
+            )
+            payload: dict[str, Any] = {"columns": {}}
+            valid_columns = set(frame.columns)
+            limit = max(1, min(int(max_values_per_column), 100))
+            with sqlite3.connect(db_path) as conn:
+                for column in column_names:
+                    if column not in valid_columns:
+                        payload["columns"][column] = {"error": f"Column `{column}` is not present in the uploaded table."}
+                        continue
+                    where_clause = f"WHERE {_quote_identifier(column)} IS NOT NULL"
+                    params: list[Any] = []
+                    if search_value:
+                        where_clause += f" AND LOWER(CAST({_quote_identifier(column)} AS TEXT)) LIKE ?"
+                        params.append(f"%{search_value.lower()}%")
+                    sql = (
+                        f"SELECT CAST({_quote_identifier(column)} AS TEXT) AS value, COUNT(*) AS row_count "
+                        f"FROM {_quote_identifier(table_name)} "
+                        f"{where_clause} "
+                        f"GROUP BY CAST({_quote_identifier(column)} AS TEXT) "
+                        f"ORDER BY row_count DESC, value ASC "
+                        f"LIMIT ?"
+                    )
+                    rows = conn.execute(sql, [*params, limit]).fetchall()
+                    payload["columns"][column] = {
+                        "values": [{"value": row[0], "row_count": row[1]} for row in rows],
+                        "searched_for": search_value,
+                    }
+            _record_tool_event(state, "inspect_column_values", "success", {"columns_checked": len(column_names)})
+            return _safe_json(payload)
+
+        @tool
         def query_dataset_sql(sql: str) -> str:
             """Run one read-only SQLite SELECT or WITH query against the uploaded CSV table."""
             _record_tool_event(state, "query_dataset_sql", "started", {"sql_preview": sql[:500]})
@@ -465,10 +516,11 @@ class AgenticCSVAnalyst:
         def propose_chart(
             chart_type: str,
             x_col: str,
-            y_col: str,
+            y_col: str | list[str],
             group_by: str | None = None,
             title: str | None = None,
             data_source: str = "latest_sql_result",
+            color_map: dict[str, str] | None = None,
         ) -> str:
             """Validate and propose a chart. If valid=false, revise the chart before final answer."""
             _record_tool_event(
@@ -490,6 +542,7 @@ class AgenticCSVAnalyst:
                 "group_by": group_by or None,
                 "title": title or "Agent-generated chart",
                 "data_source": data_source,
+                "color_map": color_map or None,
             }
             validation = validate_chart_plan(source_frame, plan)
             state["chart_validation"] = validation
@@ -509,6 +562,7 @@ class AgenticCSVAnalyst:
             inspect_dataset,
             inspect_business_context,
             inspect_data_quality,
+            inspect_column_values,
             query_dataset_sql,
             run_python_analysis,
             inspect_chart_options,

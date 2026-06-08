@@ -117,6 +117,42 @@ This is a practical MVP semantic layer. It is not yet a production metric regist
 - Azure OpenAI, OpenAI, and OpenRouter provider paths are separated cleanly.
 - The code is now easier to map to future datamart tools because the tools are generic.
 
+## Best Value-First Use Cases
+
+The fastest path is not to position the MVP as a full Tableau replacement. Full Tableau replication requires a mature semantic layer, Tableau calculated fields, LOD expressions, parameter logic, filter state, and dashboard metadata.
+
+The strongest near-term use cases are:
+
+1. **Datamart Understanding Assistant**
+   - User uploads a datamart-shaped CSV.
+   - Agent explains the grain, columns, likely dimensions, likely measures, time fields, data quality issues, and useful questions.
+   - Value: helps analysts and business users understand unfamiliar data quickly.
+
+2. **Dashboard QA / Reverse-Engineering Assistant**
+   - User uploads CSV, DML/source SQL, screenshot, and optional chart notes.
+   - Agent explains what filters, measures, axes, and calculations are needed to reproduce the dashboard chart.
+   - Value: helps diagnose whether the chart is reproducible from the available data before trying to automate it.
+
+3. **KPI Explanation Assistant**
+   - User uploads DML/source SQL.
+   - Agent explains MAT, MQT, current period, previous period, target, projection, and other KPI logic in plain English.
+   - Value: reduces dependency on reading raw SQL/Tableau logic.
+
+4. **Data Quality And Reporting Readiness Assistant**
+   - Agent checks missing periods, zero values, duplicate rows, suspicious measures, high-cardinality filters, and likely key columns.
+   - Value: practical, easy to demonstrate, and directly useful before a dashboard build or data refresh.
+
+5. **Ad Hoc Analytics Assistant**
+   - User asks one focused business question at a time.
+   - Agent inspects data, validates filters, runs SQL, proposes a chart, and explains the calculation.
+   - Value: faster one-off analysis without manually building a new Tableau sheet.
+
+Recommended demo framing:
+
+```text
+This prototype is a datamart analyst copilot. It helps users understand structured data, validate dashboard logic, detect data quality issues, and generate first-pass analytical views. It is not yet a governed Tableau replacement, but it shows how an agent can reduce manual analysis and dashboard debugging effort.
+```
+
 ## Major Gaps To Explore And Fix
 
 - **Python sandboxing:** the pandas tool now has AST-based guardrails, but it is still local model-generated code execution. Production should use a proper sandboxed execution service.
@@ -147,7 +183,7 @@ These are the main pieces of code owned by this project. They are functions/clas
   - `_profile_frame`
   - `_data_quality_summary`
   - `_diagnostic_result`
-  - tool wrappers: `inspect_dataset`, `inspect_business_context`, `inspect_data_quality`, `query_dataset_sql`, `run_python_analysis`, `inspect_chart_options`, `propose_chart`
+  - tool wrappers: `inspect_dataset`, `inspect_business_context`, `inspect_data_quality`, `inspect_column_values`, `query_dataset_sql`, `run_python_analysis`, `inspect_chart_options`, `propose_chart`
 - `langchain_agentic/llm_factory.py`
   - provider selection for Azure OpenAI, OpenAI, and OpenRouter
 - `langchain_agentic/charting.py`
@@ -156,6 +192,7 @@ These are the main pieces of code owned by this project. They are functions/clas
   - `summarize_chart_options`
   - `validate_chart_plan`
   - `build_plotly_chart`
+  - multi-series line/bar/area support for wide chart data
 - `langchain_agentic/guardrails.py`
   - `check_user_request`
   - `validate_python_analysis_code`
@@ -344,6 +381,13 @@ Why it can still fail:
 - The chart may require one or more frontend filters that are not visible in the screenshot.
 - The Python tool has guardrails and can reject model-generated code as "too complex" if the code is too long or has too many AST nodes.
 - LangChain provides the agent loop, but it does not guarantee correct business semantics. The model still needs metadata and validation.
+
+What was improved in the current foundation:
+
+- The agent can inspect distinct filter values before writing final SQL.
+- Multi-series line charts are supported through either long-form data with `group_by` or wide-form data with multiple y columns.
+- Manual chart notes are treated as stronger evidence than screenshot inference.
+- The prompt tells the agent not to invent hidden brand, TA, DA, geography, or product filters.
 
 How to get better results now:
 
@@ -556,12 +600,12 @@ What business action would you recommend investigating next, without claiming ca
 
 ## Suggested Next Steps
 
-1. Test with real datamart-shaped CSV extracts and collect failure cases.
-2. Add a safer Python execution service or disable Python for demos where risk is unacceptable.
-3. Add better chart-spec output, including KPI cards, multi-chart report sections, and dashboard layout.
-4. Add datamart connector tools that expose only approved schemas/views.
-5. Add metadata retrieval so the agent can handle many tables without stuffing all context into the prompt.
-6. Add a query approval step for large/expensive datamart queries.
+1. Pick one high-value use case first: datamart understanding, dashboard QA, KPI explanation, or data quality readiness.
+2. Test with 3-5 real datamart-shaped CSV extracts and collect repeatable failure cases.
+3. Build a small governed metric/context pack for only one dashboard family, not all dashboards.
+4. Add a dashboard QA mode that always outputs: inferred filters, metric mapping, SQL, chart, mismatch notes, and data quality warnings.
+5. Add datamart connector tools that expose only approved schemas/views.
+6. Add metadata retrieval so the agent can handle many tables without stuffing all context into the prompt.
 7. Add evaluation tests for 30-50 realistic questions.
-8. Add Tableau screenshot interpretation once CSV/datamart question answering is stable.
-9. Move to explicit LangGraph when we need durable multi-stage workflows, approvals, retries, or multiple specialist agents.
+8. Add a safer Python execution service or disable Python for demos where risk is unacceptable.
+9. Move to explicit LangGraph when we need durable multi-stage workflows, approval checkpoints, retries, evaluator agents, or multiple specialist agents.
