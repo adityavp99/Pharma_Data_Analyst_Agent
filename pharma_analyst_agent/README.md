@@ -1,15 +1,15 @@
 # LangChain Agentic Data Analyst MVP
 
-Local proof-of-concept for a generalized data analyst agent that can reason over an uploaded CSV, decide which tools to use, run multi-step analysis, answer follow-up questions, and produce answer/table/chart outputs.
+Local proof-of-concept for a generalized data analyst agent that can reason over one or more uploaded CSVs, decide which tools to use, run multi-step analysis, answer follow-up questions, and produce answer/table/chart outputs.
 
 Historical notes are archived under [`docs/archive`](docs/archive). The root README describes only the active LangChain agentic CSV application.
 
 ## What The Active App Does
 
-- Upload a CSV.
+- Upload one or more CSV files.
 - Optionally upload DML/SQL context that contains source logic, calculated fields, MQT/MAT-style formulas, and filters.
 - Optionally upload a Tableau/chart screenshot as visual context when the configured model supports image input.
-- Store it as a temporary local SQLite table.
+- Store each CSV as a temporary local SQLite table in one workspace.
 - Let a LangChain `create_agent` loop decide what to do.
 - Give the agent tools for dataset inspection, SQL querying, pandas analysis, chart option inspection, and chart proposal/validation.
 - Render the final answer, latest SQL result, Python result, chart, and agent tool trace.
@@ -56,7 +56,7 @@ AGENT_ENABLE_PYTHON_TOOL=true
 streamlit run app.py
 ```
 
-Upload a CSV and ask:
+Upload one or more CSVs and ask:
 
 ```text
 What kind of data does this file contain? Show me sample rows, columns, and useful questions I can ask.
@@ -71,13 +71,14 @@ pytest
 ## Current Architecture
 
 1. `app.py` receives CSV upload and chat messages.
-2. `tools/csv_tool.py` loads the CSV into SQLite.
+2. `tools/csv_tool.py` loads each CSV into SQLite as a separate table.
 3. `langchain_agentic/llm_factory.py` builds the LLM client.
 4. `langchain_agentic/agent.py` creates a LangChain agent with tools.
 5. The agent decides whether to call:
    - `inspect_dataset`
    - `inspect_business_context`
    - `inspect_data_quality`
+   - `inspect_column_values`
    - `query_dataset_sql`
    - `run_python_analysis`
    - `inspect_chart_options`
@@ -93,6 +94,7 @@ The current app uses a lightweight context layer that gives the agent business m
 The context layer currently comes from:
 
 - **Uploaded CSV schema:** table name, columns, row count, sample rows, column profiles, likely dimensions, likely measures, and likely time columns.
+- **Multiple uploaded tables:** each uploaded CSV becomes a SQLite table. The agent can inspect schemas, possible keys, filter values, row counts, and join assumptions across tables.
 - **Uploaded DML/SQL file:** parsed as metadata only. It extracts tables/views, CTE names, calculated aliases, `WHERE` filters, and metric snippets such as MAT, MQT, YTD, QTD, MTD, TRx, NRx, and NBRx.
 - **Manual dashboard/filter notes:** user-provided notes such as `Timeperiod=MTH`, `geography_lvl1=Australia`, or `brandgroup=overall/no filter`.
 - **Screenshot visual context:** optional image context for models that support vision.
@@ -109,6 +111,7 @@ This is a practical MVP semantic layer. It is not yet a production metric regist
 - User request guardrails refuse unsafe requests such as credential extraction, medical advice, prompt extraction, and bulk data dumping.
 - Python code guardrails block imports, file/database reads and writes, unsafe builtins, and overly complex snippets.
 - The agent can inspect data quality: missing values, duplicate rows, likely key columns, cardinality, and numeric ranges.
+- The agent can inspect multiple uploaded tables and run SQL joins across them.
 - The agent can inspect uploaded DML/SQL business context, including table references, calculated aliases, filters, and MQT/MAT-like snippets.
 - Chart proposals are now validated before rendering.
 - Plotly charts are more interactive than the previous basic Altair charts.
@@ -129,7 +132,7 @@ The strongest near-term use cases are:
    - Value: helps analysts and business users understand unfamiliar data quickly.
 
 2. **Dashboard QA / Reverse-Engineering Assistant**
-   - User uploads CSV, DML/source SQL, screenshot, and optional chart notes.
+   - User uploads one or more CSVs, DML/source SQL, screenshot, and optional chart notes.
    - Agent explains what filters, measures, axes, and calculations are needed to reproduce the dashboard chart.
    - Value: helps diagnose whether the chart is reproducible from the available data before trying to automate it.
 
@@ -152,6 +155,8 @@ Recommended demo framing:
 ```text
 This prototype is a datamart analyst copilot. It helps users understand structured data, validate dashboard logic, detect data quality issues, and generate first-pass analytical views. It is not yet a governed Tableau replacement, but it shows how an agent can reduce manual analysis and dashboard debugging effort.
 ```
+
+For a step-by-step dashboard reverse-engineering workflow, see [`docs/dashboard_reverse_engineering_test_plan.md`](docs/dashboard_reverse_engineering_test_plan.md).
 
 ## Major Gaps To Explore And Fix
 

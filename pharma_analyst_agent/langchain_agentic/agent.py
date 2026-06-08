@@ -29,12 +29,15 @@ SYSTEM_PROMPT = """
 You are a fully agentic data analyst for an uploaded CSV-backed SQLite database.
 
 You must reason step by step and decide which tools to use. The user only gives a question.
-You can inspect the dataset, run SQL, run pandas-based analysis, and propose a chart.
+You can inspect one or more uploaded CSV tables, run SQL, run pandas-based analysis on the primary table,
+and propose a chart.
 
 Operating rules:
 - Use tools before answering factual questions about the data.
 - Do not invent numbers. Numbers must come from tool results.
 - Prefer SQL for filtering, grouping, joining, counting, totals, averages, and table previews.
+- If multiple tables are uploaded, inspect the dataset first, identify candidate join keys, validate join row counts,
+  and use SQL joins when the question needs fields from more than one table.
 - Treat columns such as year_month, YYYYMM, YYYY-MM, month, date, quarter, or year as time dimensions.
   Do not sum, average, or use time dimensions as y-axis measures.
 - Use Python when the task needs statistical analysis, custom calculations, correlation, trend logic,
@@ -43,6 +46,8 @@ Operating rules:
   express the needed calculation or reshape.
 - If the user asks what the CSV contains, inspect the dataset and summarize columns, row count,
   sample values, likely meaning, and good follow-up question ideas.
+- If the user asks how tables connect, compare same-named columns, ID-like columns, cardinality, distinct values,
+  and joined row counts. State join assumptions and possible grain issues.
 - If the user provides DML/SQL/dashboard context or asks about business definitions, MQT, MAT, filters,
   Tableau replication, or calculated fields, call inspect_business_context before writing SQL or charts.
 - For dashboard or Tableau-style replication, call inspect_column_values for any requested filter columns before
@@ -99,6 +104,10 @@ def _safe_json(value: Any) -> str:
 def _read_table(db_path: str | Path, table_name: str, row_limit: int = 10000) -> pd.DataFrame:
     with sqlite3.connect(str(db_path)) as conn:
         return pd.read_sql_query(f'SELECT * FROM "{table_name}" LIMIT ?', conn, params=(row_limit,))
+
+
+def _read_tables(db_path: str | Path, table_names: list[str], row_limit: int = 10000) -> dict[str, pd.DataFrame]:
+    return {table_name: _read_table(db_path, table_name, row_limit=row_limit) for table_name in table_names}
 
 
 def _profile_frame(frame: pd.DataFrame) -> dict[str, Any]:
@@ -293,13 +302,17 @@ class AgenticCSVAnalyst:
     def __init__(
         self,
         db_path: str | Path,
-        table_name: str,
+        table_name: str | list[str],
         business_context: dict[str, Any] | None = None,
         dashboard_context: str = "",
     ):
         self.db_path = Path(db_path)
-        self.table_name = table_name
-        self.frame = _read_table(self.db_path, self.table_name)
+        self.table_names = [table_name] if isinstance(table_name, str) else list(table_name)
+        if not self.table_names:
+            raise ValueError("At least one table name is required.")
+        self.table_name = self.table_names[0]
+        self.frames = _read_tables(self.db_path, self.table_names)
+        self.frame = self.frames[self.table_name]
         self.business_context = business_context or {}
         self.dashboard_context = dashboard_context
         self.state: dict[str, Any] = {
@@ -322,7 +335,9 @@ class AgenticCSVAnalyst:
             ) from exc
 
         db_path = str(self.db_path)
-        table_name = self.table_name
+        table_names = self.table_names
+        primary_table_name = self.table_name
+        frames = self.frames
         frame = self.frame
         state = self.state
         business_context = self.business_context
@@ -330,17 +345,37 @@ class AgenticCSVAnalyst:
 
         @tool
         def inspect_dataset() -> str:
-            """Inspect uploaded CSV schema, row counts, sample rows, and column-level profile."""
+            """Inspect uploaded CSV table schemas, row counts, sample rows, and column-level profiles."""
             _record_tool_event(state, "inspect_dataset", "started")
-            details = describe_table(table_name, db_path, sample_rows=8)
-            _record_tool_event(state, "inspect_dataset", "success", {"sample_rows": 8})
+            table_details = {
+                table_name: describe_table(table_name, db_path, sample_rows=8)
+                for table_name in table_names
+            }
+            _record_tool_event(state, "inspect_dataset", "success", {"tables": table_names, "sample_rows": 8})
             return _safe_json(
                 {
                     "row_counts": get_table_row_counts(db_path),
                     "schema_text": get_schema_text(db_path),
-                    "sample_rows": details["sample_rows"],
-                    "profile": _profile_frame(frame),
-                    "chart_options": summarize_chart_options(frame),
+                    "primary_table": primary_table_name,
+                    "tables_loaded_for_analysis": table_names,
+                    "sample_rows_by_table": {
+                        table_name: details["sample_rows"]
+                        for table_name, details in table_details.items()
+                    },
+                    "profiles_by_table": {
+                        table_name: _profile_frame(frames[table_name])
+                        for table_name in table_names
+                    },
+                    "chart_options_by_table": {
+                        table_name: summarize_chart_options(frames[table_name])
+                        for table_name in table_names
+                    },
+                    "relationship_guidance": [
+                        "Compare same-named columns across tables as possible join keys.",
+                        "Compare high-cardinality ID-like columns as possible join keys.",
+                        "Validate candidate joins with row counts before using them for metrics.",
+                        "For dashboard reverse engineering, first identify the table that contains measures and the table that contains filter dimensions.",
+                    ],
                 }
             )
 
@@ -363,55 +398,77 @@ class AgenticCSVAnalyst:
 
         @tool
         def inspect_data_quality() -> str:
-            """Inspect missing values, duplicate rows, possible keys, cardinality, and numeric ranges."""
+            """Inspect missing values, duplicate rows, possible keys, cardinality, and numeric ranges by table."""
             _record_tool_event(state, "inspect_data_quality", "success")
-            return _safe_json(_data_quality_summary(frame))
+            return _safe_json(
+                {
+                    "primary_table": primary_table_name,
+                    "tables": {
+                        table_name: _data_quality_summary(frames[table_name])
+                        for table_name in table_names
+                    },
+                }
+            )
 
         @tool
         def inspect_column_values(
             column_names: list[str],
             search_value: str | None = None,
+            table_name: str | None = None,
             max_values_per_column: int = 25,
         ) -> str:
-            """Inspect distinct values and counts for columns, optionally searching for a filter value."""
+            """Inspect distinct values and counts for columns across one or more tables, optionally searching for a filter value."""
             _record_tool_event(
                 state,
                 "inspect_column_values",
                 "started",
-                {"column_names": column_names, "search_value": search_value},
+                {"column_names": column_names, "search_value": search_value, "table_name": table_name},
             )
-            payload: dict[str, Any] = {"columns": {}}
-            valid_columns = set(frame.columns)
+            selected_tables = [table_name] if table_name else table_names
+            payload: dict[str, Any] = {"tables": {}}
             limit = max(1, min(int(max_values_per_column), 100))
             with sqlite3.connect(db_path) as conn:
-                for column in column_names:
-                    if column not in valid_columns:
-                        payload["columns"][column] = {"error": f"Column `{column}` is not present in the uploaded table."}
+                for selected_table in selected_tables:
+                    if selected_table not in table_names:
+                        payload["tables"][selected_table] = {"error": f"Table `{selected_table}` is not loaded."}
                         continue
-                    where_clause = f"WHERE {_quote_identifier(column)} IS NOT NULL"
-                    params: list[Any] = []
-                    if search_value:
-                        where_clause += f" AND LOWER(CAST({_quote_identifier(column)} AS TEXT)) LIKE ?"
-                        params.append(f"%{search_value.lower()}%")
-                    sql = (
-                        f"SELECT CAST({_quote_identifier(column)} AS TEXT) AS value, COUNT(*) AS row_count "
-                        f"FROM {_quote_identifier(table_name)} "
-                        f"{where_clause} "
-                        f"GROUP BY CAST({_quote_identifier(column)} AS TEXT) "
-                        f"ORDER BY row_count DESC, value ASC "
-                        f"LIMIT ?"
-                    )
-                    rows = conn.execute(sql, [*params, limit]).fetchall()
-                    payload["columns"][column] = {
-                        "values": [{"value": row[0], "row_count": row[1]} for row in rows],
-                        "searched_for": search_value,
-                    }
-            _record_tool_event(state, "inspect_column_values", "success", {"columns_checked": len(column_names)})
+                    valid_columns = set(frames[selected_table].columns)
+                    payload["tables"][selected_table] = {"columns": {}}
+                    for column in column_names:
+                        if column not in valid_columns:
+                            payload["tables"][selected_table]["columns"][column] = {
+                                "error": f"Column `{column}` is not present in table `{selected_table}`."
+                            }
+                            continue
+                        where_clause = f"WHERE {_quote_identifier(column)} IS NOT NULL"
+                        params: list[Any] = []
+                        if search_value:
+                            where_clause += f" AND LOWER(CAST({_quote_identifier(column)} AS TEXT)) LIKE ?"
+                            params.append(f"%{search_value.lower()}%")
+                        sql = (
+                            f"SELECT CAST({_quote_identifier(column)} AS TEXT) AS value, COUNT(*) AS row_count "
+                            f"FROM {_quote_identifier(selected_table)} "
+                            f"{where_clause} "
+                            f"GROUP BY CAST({_quote_identifier(column)} AS TEXT) "
+                            f"ORDER BY row_count DESC, value ASC "
+                            f"LIMIT ?"
+                        )
+                        rows = conn.execute(sql, [*params, limit]).fetchall()
+                        payload["tables"][selected_table]["columns"][column] = {
+                            "values": [{"value": row[0], "row_count": row[1]} for row in rows],
+                            "searched_for": search_value,
+                        }
+            _record_tool_event(
+                state,
+                "inspect_column_values",
+                "success",
+                {"columns_checked": len(column_names), "tables_checked": len(selected_tables)},
+            )
             return _safe_json(payload)
 
         @tool
         def query_dataset_sql(sql: str) -> str:
-            """Run one read-only SQLite SELECT or WITH query against the uploaded CSV table."""
+            """Run one read-only SQLite SELECT or WITH query against the uploaded CSV tables."""
             _record_tool_event(state, "query_dataset_sql", "started", {"sql_preview": sql[:500]})
             result = run_readonly_sql(sql, db_path, max_rows=AGENT_MAX_SQL_ROWS)
             state["sql_queries"].append(sql)

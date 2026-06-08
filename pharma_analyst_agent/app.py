@@ -21,6 +21,17 @@ from tools.csv_tool import load_csv_to_sqlite, safe_table_name
 from tools.schema_tool import get_table_row_counts
 
 
+def _unique_table_names(file_names: list[str]) -> list[str]:
+    counts: dict[str, int] = {}
+    table_names: list[str] = []
+    for file_name in file_names:
+        base_name = safe_table_name(file_name)
+        count = counts.get(base_name, 0)
+        counts[base_name] = count + 1
+        table_names.append(base_name if count == 0 else f"{base_name}_{count + 1}")
+    return table_names
+
+
 def _sql_result_frame(sql_result: dict[str, Any] | None) -> pd.DataFrame:
     if not sql_result or "error" in sql_result:
         return pd.DataFrame()
@@ -148,7 +159,7 @@ def render_result_details(result: dict[str, Any], db_path: Path, table_name: str
 st.set_page_config(page_title="LangChain Agentic CSV Analyst", layout="wide")
 st.title("LangChain Agentic CSV Analyst")
 st.caption(
-    "Upload a CSV and chat with a LangChain data analyst agent. The agent decides whether to inspect data, "
+    "Upload one or more CSVs and chat with a LangChain data analyst agent. The agent decides whether to inspect data, "
     "run SQL, run pandas analysis, and propose charts."
 )
 
@@ -159,9 +170,9 @@ with st.sidebar:
     st.write("Mode: CSV-backed local SQLite")
     st.caption("Large CSV uploads are loaded into SQLite in chunks and reused during the chat session.")
 
-uploaded_csv = st.file_uploader("Upload CSV", type=["csv"])
-if uploaded_csv is None:
-    st.info("Upload a CSV file to start the agentic workflow.")
+uploaded_csvs = st.file_uploader("Upload CSV file(s)", type=["csv"], accept_multiple_files=True)
+if not uploaded_csvs:
+    st.info("Upload one or more CSV files to start the agentic workflow.")
     st.stop()
 
 with st.sidebar:
@@ -201,27 +212,37 @@ with st.sidebar:
         ),
     )
 
-table_name = safe_table_name(uploaded_csv.name)
+table_names = _unique_table_names([uploaded_csv.name for uploaded_csv in uploaded_csvs])
+primary_table_name = table_names[0]
 uploaded_db_path = PROCESSED_DATA_DIR / "agentic_uploaded_runtime.db"
-uploaded_size = getattr(uploaded_csv, "size", None)
-csv_source_signature = f"{uploaded_csv.name}:{uploaded_size}:{table_name}"
+csv_source_signature = "|".join(
+    f"{uploaded_csv.name}:{getattr(uploaded_csv, 'size', None)}:{table_name}"
+    for uploaded_csv, table_name in zip(uploaded_csvs, table_names)
+)
 needs_csv_reload = (
     st.session_state.get("loaded_csv_source_signature") != csv_source_signature
-    or st.session_state.get("loaded_csv_table_name") != table_name
+    or st.session_state.get("loaded_csv_table_names") != table_names
     or not uploaded_db_path.exists()
 )
 
 if needs_csv_reload:
-    uploaded_csv.seek(0)
+    if uploaded_db_path.exists():
+        uploaded_db_path.unlink()
     with st.spinner("Loading CSV into local SQLite. Large files can take a few minutes..."):
-        uploaded_info = load_csv_to_sqlite(uploaded_csv, uploaded_db_path, table_name=table_name)
+        uploaded_infos = []
+        for uploaded_csv, table_name in zip(uploaded_csvs, table_names):
+            uploaded_csv.seek(0)
+            uploaded_infos.append(load_csv_to_sqlite(uploaded_csv, uploaded_db_path, table_name=table_name))
     st.session_state.loaded_csv_source_signature = csv_source_signature
-    st.session_state.loaded_csv_table_name = table_name
-    st.session_state.loaded_csv_info = uploaded_info
+    st.session_state.loaded_csv_table_names = table_names
+    st.session_state.loaded_csv_infos = uploaded_infos
 else:
-    uploaded_info = st.session_state.loaded_csv_info
+    uploaded_infos = st.session_state.loaded_csv_infos
 
-file_signature = f"{uploaded_csv.name}:{uploaded_info['rows']}:{','.join(uploaded_info['columns'])}"
+file_signature = "|".join(
+    f"{info['table_name']}:{info['rows']}:{','.join(info['columns'])}"
+    for info in uploaded_infos
+)
 dml_context: dict[str, Any] | None = None
 if uploaded_sql is not None:
     sql_text = uploaded_sql.getvalue().decode("utf-8", errors="replace")
@@ -250,14 +271,16 @@ elif "chat_messages" not in st.session_state:
     st.session_state.chat_messages = []
 
 st.success(
-    f"Loaded `{uploaded_csv.name}` as table `{table_name}` with "
-    f"{uploaded_info['rows']:,} rows and {len(uploaded_info['columns'])} columns."
+    f"Loaded {len(uploaded_infos)} CSV file(s) into local SQLite. "
+    f"Primary table: `{primary_table_name}`."
 )
 
 with st.expander("Uploaded data preview", expanded=not st.session_state.get("chat_messages")):
-    st.dataframe(pd.DataFrame(uploaded_info["sample_rows"]), hide_index=True, use_container_width=True)
-    st.write("Columns")
-    st.write(uploaded_info["columns"])
+    for info in uploaded_infos:
+        st.markdown(f"**`{info['table_name']}`**: {info['rows']:,} rows, {len(info['columns'])} columns")
+        st.dataframe(pd.DataFrame(info["sample_rows"]), hide_index=True, use_container_width=True)
+        st.write("Columns")
+        st.write(info["columns"])
 
 with st.sidebar:
     st.subheader("Tables")
@@ -280,8 +303,8 @@ with st.sidebar:
 if not st.session_state.chat_messages:
     with st.chat_message("assistant"):
         st.markdown(
-            "I loaded your CSV. Ask me what the file contains, what metrics matter, "
-            "or request a specific analysis/chart."
+            "I loaded your CSV workspace. Ask me to inspect relationships, validate joins, "
+            "reverse-engineer dashboard logic, or create a focused analysis/chart."
         )
 
 for message in st.session_state.chat_messages:
@@ -289,7 +312,7 @@ for message in st.session_state.chat_messages:
         st.markdown(message["content"])
         if message["role"] == "assistant" and message.get("result"):
             with st.expander("Analysis details", expanded=False):
-                render_result_details(message["result"], uploaded_db_path, table_name)
+                render_result_details(message["result"], uploaded_db_path, primary_table_name)
 
 prompt = st.chat_input(
     "Ask a follow-up or a new analytical question about the uploaded CSV..."
@@ -311,7 +334,7 @@ if prompt:
             try:
                 analyst = AgenticCSVAnalyst(
                     uploaded_db_path,
-                    table_name,
+                    table_names,
                     business_context=dml_context,
                     dashboard_context=(
                         f"Dashboard/filter notes:\n{dashboard_notes or 'None provided.'}\n\n"
@@ -333,7 +356,7 @@ if prompt:
 
         st.markdown(result["answer"])
         with st.expander("Analysis details", expanded=True):
-            render_result_details(result, uploaded_db_path, table_name)
+            render_result_details(result, uploaded_db_path, primary_table_name)
 
     st.session_state.chat_messages.append(
         {

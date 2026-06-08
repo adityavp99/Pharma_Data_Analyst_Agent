@@ -38,7 +38,7 @@ def test_langchain_agentic_tools_work_without_llm_call(tmp_path: Path) -> None:
     inspected = json.loads(tools["inspect_dataset"].invoke({}))
     assert inspected["row_counts"] == {"uploaded_data": 3}
     assert "product" in inspected["schema_text"]
-    assert "chart_options" in inspected
+    assert "uploaded_data" in inspected["chart_options_by_table"]
 
     sql_result = json.loads(
         tools["query_dataset_sql"].invoke(
@@ -201,9 +201,10 @@ def test_data_quality_tool_reports_duplicates_and_possible_keys(tmp_path: Path) 
     tools = {tool.name: tool for tool in analyst._build_tools()}
     quality = json.loads(tools["inspect_data_quality"].invoke({}))
 
-    assert quality["duplicate_row_count"] == 1
-    assert "sales" in quality["columns_with_missing_values"]
-    assert quality["row_count"] == 3
+    table_quality = quality["tables"]["uploaded_data"]
+    assert table_quality["duplicate_row_count"] == 1
+    assert "sales" in table_quality["columns_with_missing_values"]
+    assert table_quality["row_count"] == 3
 
 
 def test_column_values_tool_validates_requested_filters(tmp_path: Path) -> None:
@@ -231,8 +232,49 @@ def test_column_values_tool_validates_requested_filters(tmp_path: Path) -> None:
         )
     )
 
-    assert result["columns"]["geography_lvl1"]["values"][0]["value"] == "Australia"
-    assert result["columns"]["missing_column"]["error"]
+    assert result["tables"]["uploaded_data"]["columns"]["geography_lvl1"]["values"][0]["value"] == "Australia"
+    assert result["tables"]["uploaded_data"]["columns"]["missing_column"]["error"]
+
+
+def test_agent_can_inspect_multiple_uploaded_tables(tmp_path: Path) -> None:
+    db_path = tmp_path / "multi.db"
+    sales = pd.DataFrame(
+        [
+            {"product_id": 1, "year_month": 202501, "sales_value": 100},
+            {"product_id": 2, "year_month": 202501, "sales_value": 50},
+        ]
+    )
+    products = pd.DataFrame(
+        [
+            {"product_id": 1, "brand": "DARZALEX"},
+            {"product_id": 2, "brand": "OTHER"},
+        ]
+    )
+    with sqlite3.connect(db_path) as conn:
+        sales.to_sql("sales", conn, index=False, if_exists="replace")
+        products.to_sql("products", conn, index=False, if_exists="replace")
+
+    analyst = AgenticCSVAnalyst(db_path, ["sales", "products"])
+    tools = {tool.name: tool for tool in analyst._build_tools()}
+
+    inspected = json.loads(tools["inspect_dataset"].invoke({}))
+    assert inspected["row_counts"] == {"products": 2, "sales": 2}
+    assert inspected["primary_table"] == "sales"
+    assert "products" in inspected["profiles_by_table"]
+
+    sql_result = json.loads(
+        tools["query_dataset_sql"].invoke(
+            {
+                "sql": (
+                    "SELECT p.brand, SUM(s.sales_value) AS sales_value "
+                    "FROM sales s JOIN products p ON s.product_id = p.product_id "
+                    "GROUP BY p.brand"
+                )
+            }
+        )
+    )
+    assert sql_result["columns"] == ["brand", "sales_value"]
+    assert sql_result["rows"][0] == ["DARZALEX", 100]
 
 
 def test_tool_events_are_recorded_for_diagnostics(tmp_path: Path) -> None:
